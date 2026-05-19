@@ -52,3 +52,76 @@ class ContextPackage:
     content: str
     memory_ids: list[str]
     created_at: str = field(default_factory=now_iso)
+
+
+@dataclass(frozen=True)
+class MemoryUseDecision:
+    should_use: bool
+    reason: str
+    confidence: float
+    signals: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PreparedContext:
+    decision: MemoryUseDecision
+    package: ContextPackage | None
+    results: list[SearchResult] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CaptureResult:
+    should_capture: bool
+    reason: str
+    event: Event | None = None
+    memories: list[Memory] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ProfileEvidence:
+    id: str
+    trait_key: str
+    evidence_type: str
+    content: str
+    source_event_id: str | None = None
+    source_memory_id: str | None = None
+    behavior_event_id: str | None = None
+    confidence: float = 0.6
+    created_at: str = field(default_factory=now_iso)
+
+
+@dataclass(frozen=True)
+class ProfileTrait:
+    id: str
+    trait_type: str
+    trait_key: str
+    statement: str
+    scope: str
+    stability: float
+    confidence: float
+    evidence_count: int
+    evidence_ids: list[str] = field(default_factory=list)
+    status: str = "active"
+    first_seen_at: str = field(default_factory=now_iso)
+    last_confirmed_at: str = field(default_factory=now_iso)
+    updated_at: str = field(default_factory=now_iso)
+
+
+@dataclass(frozen=True)
+class BehaviorEvent:
+    id: str
+    context: str
+    chosen: list[str] = field(default_factory=list)
+    rejected: list[str] = field(default_factory=list)
+    deferred: list[str] = field(default_factory=list)
+    reason: str | None = None
+    source_ref: str | None = None
+    created_at: str = field(default_factory=now_iso)
+
+
+@dataclass(frozen=True)
+class ConsolidationResult:
+    evidence_created: list[ProfileEvidence] = field(default_factory=list)
+    traits_updated: list[ProfileTrait] = field(default_factory=list)
+    memories_scanned: int = 0
+    behavior_events_scanned: int = 0

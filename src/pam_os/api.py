@@ -7,14 +7,14 @@ from pam_os.runtime import PersonalMemoryRuntime
 from pam_os.serialization import to_plain
 
 
-def create_app(db_path: Path | str | None = None):
+def create_app(db_path: Path | str | None = None, config=None):
     try:
         from fastapi import FastAPI
         from pydantic import BaseModel, Field
     except ImportError as exc:
         raise RuntimeError('REST API dependencies are missing. Install with: pip install -e ".[api]"') from exc
 
-    runtime = PersonalMemoryRuntime(db_path=db_path)
+    runtime = PersonalMemoryRuntime(db_path=db_path, config=config)
     app = FastAPI(title="Personal Memory Runtime", version="0.1.0")
 
     class EventRequest(BaseModel):
@@ -26,9 +26,34 @@ def create_app(db_path: Path | str | None = None):
 
     class CompileRequest(BaseModel):
         task: str
-        limit: int = 12
+        limit: int | None = None
         min_importance: float = 0.0
         min_confidence: float = 0.0
+
+    class PrepareRequest(BaseModel):
+        task: str
+        conversation_summary: str | None = None
+        force: bool = False
+        limit: int | None = None
+        max_chars: int | None = None
+
+    class CaptureRequest(BaseModel):
+        content: str
+        source: str = "conversation"
+        source_ref: str | None = None
+        metadata: dict[str, Any] = Field(default_factory=dict)
+        force: bool = False
+
+    class BehaviorChoiceRequest(BaseModel):
+        context: str
+        chosen: list[str] = Field(default_factory=list)
+        rejected: list[str] = Field(default_factory=list)
+        deferred: list[str] = Field(default_factory=list)
+        reason: str | None = None
+        source_ref: str | None = None
+
+    class ConsolidateRequest(BaseModel):
+        recent: int | None = None
 
     class ReflectRequest(BaseModel):
         recent: int = 50
@@ -53,6 +78,55 @@ def create_app(db_path: Path | str | None = None):
     def search_memory(q: str, limit: int = 10) -> list[dict[str, Any]]:
         return to_plain(runtime.search_memory(q, limit=limit))
 
+    @app.get("/memory/should-use")
+    def should_use_memory(task: str, conversation_summary: str | None = None) -> dict[str, Any]:
+        return to_plain(runtime.should_use_memory(task, conversation_summary))
+
+    @app.post("/context/prepare")
+    def prepare_context(request: PrepareRequest) -> dict[str, Any]:
+        return to_plain(
+            runtime.prepare_context(
+                request.task,
+                conversation_summary=request.conversation_summary,
+                force=request.force,
+                limit=request.limit,
+                max_chars=request.max_chars,
+            )
+        )
+
+    @app.post("/memory/capture")
+    def capture_memory(request: CaptureRequest) -> dict[str, Any]:
+        return to_plain(
+            runtime.capture_memory(
+                request.content,
+                source=request.source,
+                source_ref=request.source_ref,
+                metadata=request.metadata,
+                force=request.force,
+            )
+        )
+
+    @app.post("/behavior/choice")
+    def record_behavior_choice(request: BehaviorChoiceRequest) -> dict[str, Any]:
+        return to_plain(
+            runtime.record_behavior_choice(
+                context=request.context,
+                chosen=request.chosen,
+                rejected=request.rejected,
+                deferred=request.deferred,
+                reason=request.reason,
+                source_ref=request.source_ref,
+            )
+        )
+
+    @app.post("/memory/consolidate")
+    def consolidate_memory(request: ConsolidateRequest) -> dict[str, Any]:
+        return to_plain(runtime.consolidate_memory(recent=request.recent))
+
+    @app.get("/profile")
+    def get_user_profile(limit: int = 20, q: str | None = None) -> list[dict[str, Any]]:
+        return to_plain(runtime.get_user_profile(limit=limit, query=q))
+
     @app.post("/context/compile")
     def compile_context(request: CompileRequest) -> dict[str, Any]:
         return to_plain(
@@ -71,10 +145,10 @@ def create_app(db_path: Path | str | None = None):
     return app
 
 
-def serve(*, host: str, port: int, db_path: Path | str | None = None) -> None:
+def serve(*, host: str, port: int, db_path: Path | str | None = None, config=None) -> None:
     try:
         import uvicorn
     except ImportError as exc:
         raise RuntimeError('REST API dependencies are missing. Install with: pip install -e ".[api]"') from exc
-    app = create_app(db_path=db_path)
+    app = create_app(db_path=db_path, config=config)
     uvicorn.run(app, host=host, port=port)

@@ -1,0 +1,52 @@
+# Personal AI Memory OS configuration example.
+# Copy this file to config/pam-os.toml and edit local values there.
+
+[storage]
+# SQLite database path. Relative paths are resolved from the project working directory.
+# Environment override: PAM_OS_DB
+db_path = ".pam-os/memory.sqlite3"
+
+[server]
+# REST API bind address and port used by `memory serve`.
+host = "127.0.0.1"
+port = 8765
+
+[context]
+# Default number of ordinary memories selected by prepare/compile flows.
+default_limit = 12
+
+# Maximum characters in the final prompt-ready context package.
+# This is a simple MVP budget, not an exact tokenizer-based token count.
+max_chars = 4000
+
+# Number of profile traits considered before ordinary memories.
+profile_limit = 8
+
+[consolidation]
+# Number of recent memories and behavior events scanned by one consolidation run.
+recent_limit = 100
+
+# How much trait stability increases for each additional supporting evidence item.
+stability_increment = 0.12
+
+# Maximum confidence and stability values for profile traits.
+max_confidence = 0.98
+max_stability = 0.98
+
+[orchestrator]
+# Threshold for deciding whether a user request should read memory.
+memory_use_threshold = 0.5
+
+# Threshold for deciding whether content should be captured as memory.
+capture_threshold = 0.5
+
+# Extra candidate multiplier before reranking and budget trimming.
+candidate_multiplier = 3
+
+[retrieval]
+# Maximum query terms extracted for SQLite FTS/LIKE search.
+max_query_terms = 12
+
+[profile]
+# Default number of profile traits returned by `memory profile`.
+default_limit = 20

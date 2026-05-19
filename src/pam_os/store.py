@@ -5,14 +5,16 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from pam_os.models import ContextPackage, Event, Memory, SearchResult
+from pam_os.config import RetrievalConfig
+from pam_os.models import BehaviorEvent, ContextPackage, Event, Memory, ProfileEvidence, ProfileTrait, SearchResult
 
 
 class MemoryStore:
-    def __init__(self, db_path: Path | str):
+    def __init__(self, db_path: Path | str, *, retrieval_config: RetrievalConfig | None = None):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._fts_available: bool | None = None
+        self.retrieval_config = retrieval_config or RetrievalConfig()
         self.init()
 
     def connect(self) -> sqlite3.Connection:
@@ -66,6 +68,46 @@ class MemoryStore:
                   content TEXT NOT NULL,
                   memory_ids_json TEXT NOT NULL DEFAULT '[]',
                   created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS profile_evidence (
+                  id TEXT PRIMARY KEY,
+                  trait_key TEXT NOT NULL,
+                  evidence_type TEXT NOT NULL,
+                  content TEXT NOT NULL,
+                  source_event_id TEXT,
+                  source_memory_id TEXT,
+                  behavior_event_id TEXT,
+                  confidence REAL NOT NULL,
+                  created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS profile_traits (
+                  id TEXT PRIMARY KEY,
+                  trait_type TEXT NOT NULL,
+                  trait_key TEXT NOT NULL UNIQUE,
+                  statement TEXT NOT NULL,
+                  scope TEXT NOT NULL,
+                  stability REAL NOT NULL,
+                  confidence REAL NOT NULL,
+                  evidence_count INTEGER NOT NULL,
+                  evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+                  status TEXT NOT NULL,
+                  first_seen_at TEXT NOT NULL,
+                  last_confirmed_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS behavior_events (
+                  id TEXT PRIMARY KEY,
+                  context TEXT NOT NULL,
+                  chosen_json TEXT NOT NULL DEFAULT '[]',
+                  rejected_json TEXT NOT NULL DEFAULT '[]',
+                  deferred_json TEXT NOT NULL DEFAULT '[]',
+                  reason TEXT,
+                  source_ref TEXT,
+                  created_at TEXT NOT NULL,
+                  consolidated_at TEXT
                 );
                 """
             )
@@ -165,6 +207,165 @@ class MemoryStore:
                 (limit,),
             ).fetchall()
         return [self._row_to_memory(row) for row in rows]
+
+    def recent_unconsolidated_memories(self, *, limit: int = 100) -> list[Memory]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT m.*
+                FROM memories m
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM profile_evidence e WHERE e.source_memory_id = m.id
+                )
+                ORDER BY m.created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [self._row_to_memory(row) for row in rows]
+
+    def add_behavior_event(self, event: BehaviorEvent) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO behavior_events(
+                  id, context, chosen_json, rejected_json, deferred_json, reason, source_ref, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.id,
+                    event.context,
+                    json.dumps(event.chosen, ensure_ascii=False),
+                    json.dumps(event.rejected, ensure_ascii=False),
+                    json.dumps(event.deferred, ensure_ascii=False),
+                    event.reason,
+                    event.source_ref,
+                    event.created_at,
+                ),
+            )
+
+    def recent_unconsolidated_behavior_events(self, *, limit: int = 100) -> list[BehaviorEvent]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM behavior_events
+                WHERE consolidated_at IS NULL
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [self._row_to_behavior_event(row) for row in rows]
+
+    def mark_behavior_events_consolidated(self, ids: list[str], timestamp: str) -> None:
+        if not ids:
+            return
+        with self.connect() as conn:
+            conn.executemany(
+                "UPDATE behavior_events SET consolidated_at = ? WHERE id = ?",
+                [(timestamp, event_id) for event_id in ids],
+            )
+
+    def add_profile_evidence(self, evidence: list[ProfileEvidence]) -> None:
+        if not evidence:
+            return
+        with self.connect() as conn:
+            for item in evidence:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO profile_evidence(
+                      id, trait_key, evidence_type, content, source_event_id,
+                      source_memory_id, behavior_event_id, confidence, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item.id,
+                        item.trait_key,
+                        item.evidence_type,
+                        item.content,
+                        item.source_event_id,
+                        item.source_memory_id,
+                        item.behavior_event_id,
+                        item.confidence,
+                        item.created_at,
+                    ),
+                )
+
+    def get_profile_trait(self, trait_key: str) -> ProfileTrait | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM profile_traits WHERE trait_key = ?", (trait_key,)).fetchone()
+        return self._row_to_profile_trait(row) if row else None
+
+    def upsert_profile_trait(self, trait: ProfileTrait) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO profile_traits(
+                  id, trait_type, trait_key, statement, scope, stability, confidence,
+                  evidence_count, evidence_ids_json, status, first_seen_at,
+                  last_confirmed_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trait_key) DO UPDATE SET
+                  trait_type = excluded.trait_type,
+                  statement = excluded.statement,
+                  scope = excluded.scope,
+                  stability = excluded.stability,
+                  confidence = excluded.confidence,
+                  evidence_count = excluded.evidence_count,
+                  evidence_ids_json = excluded.evidence_ids_json,
+                  status = excluded.status,
+                  last_confirmed_at = excluded.last_confirmed_at,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    trait.id,
+                    trait.trait_type,
+                    trait.trait_key,
+                    trait.statement,
+                    trait.scope,
+                    trait.stability,
+                    trait.confidence,
+                    trait.evidence_count,
+                    json.dumps(trait.evidence_ids, ensure_ascii=False),
+                    trait.status,
+                    trait.first_seen_at,
+                    trait.last_confirmed_at,
+                    trait.updated_at,
+                ),
+            )
+
+    def list_profile_traits(
+        self,
+        *,
+        limit: int = 20,
+        status: str = "active",
+        query: str | None = None,
+    ) -> list[ProfileTrait]:
+        where = ["status = ?"]
+        params: list[Any] = [status]
+        if query:
+            terms = self._terms(query)
+            if terms:
+                like_parts = []
+                for term in terms:
+                    like_parts.append("(statement LIKE ? OR trait_key LIKE ? OR scope LIKE ?)")
+                    params.extend([f"%{term}%", f"%{term}%", f"%{term}%"])
+                where.append("(" + " OR ".join(like_parts) + ")")
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM profile_traits
+                WHERE {' AND '.join(where)}
+                ORDER BY stability DESC, confidence DESC, evidence_count DESC, updated_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [self._row_to_profile_trait(row) for row in rows]
 
     def save_context_package(self, package: ContextPackage) -> None:
         with self.connect() as conn:
@@ -289,7 +490,9 @@ class MemoryStore:
             if keyword in query
         ]
         result = tokens + ascii_tokens + cjk_keywords
-        return [term for index, term in enumerate(result) if term and term not in result[:index]][:12]
+        return [
+            term for index, term in enumerate(result) if term and term not in result[:index]
+        ][: self.retrieval_config.max_query_terms]
 
     def _like_score(self, content: str, tags_json: str, terms: list[str]) -> float:
         haystack = f"{content} {tags_json}".lower()
@@ -311,6 +514,35 @@ class MemoryStore:
             valid_to=row["valid_to"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+    def _row_to_profile_trait(self, row: sqlite3.Row) -> ProfileTrait:
+        return ProfileTrait(
+            id=row["id"],
+            trait_type=row["trait_type"],
+            trait_key=row["trait_key"],
+            statement=row["statement"],
+            scope=row["scope"],
+            stability=float(row["stability"]),
+            confidence=float(row["confidence"]),
+            evidence_count=int(row["evidence_count"]),
+            evidence_ids=json.loads(row["evidence_ids_json"] or "[]"),
+            status=row["status"],
+            first_seen_at=row["first_seen_at"],
+            last_confirmed_at=row["last_confirmed_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def _row_to_behavior_event(self, row: sqlite3.Row) -> BehaviorEvent:
+        return BehaviorEvent(
+            id=row["id"],
+            context=row["context"],
+            chosen=json.loads(row["chosen_json"] or "[]"),
+            rejected=json.loads(row["rejected_json"] or "[]"),
+            deferred=json.loads(row["deferred_json"] or "[]"),
+            reason=row["reason"],
+            source_ref=row["source_ref"],
+            created_at=row["created_at"],
         )
 
 

@@ -23,16 +23,78 @@ By default, data is stored in `.pam-os/memory.sqlite3`. Override it with:
 $env:PAM_OS_DB = "C:\path\to\memory.sqlite3"
 ```
 
+## Configuration
+
+Copy the example config and edit local settings:
+
+```powershell
+Copy-Item config\pam-os.example.toml config\pam-os.toml
+```
+
+The runtime loads config in this order:
+
+```text
+CLI arguments > environment variables > config/pam-os.toml > built-in defaults
+```
+
+You can also point to a custom config file:
+
+```powershell
+$env:PAM_OS_CONFIG = "C:\path\to\pam-os.toml"
+uv run --python 3.12 memory --config C:\path\to\pam-os.toml prepare "我继续做 PAM-OS"
+```
+
+Important sections:
+
+- `[storage]`: SQLite database path.
+- `[server]`: REST host and port.
+- `[context]`: memory limits, context character budget, profile trait injection count.
+- `[consolidation]`: how many recent memories/behavior events are scanned and how fast profile stability grows.
+- `[orchestrator]`: thresholds for reading and capturing memory.
+- `[retrieval]`: query term extraction limit.
+- `[profile]`: default number of profile traits returned.
+
 ## CLI
 
 ```text
 memory init
 memory add <content> [--source manual] [--metadata-json {...}]
 memory search <query> [--limit 10]
+memory should-use <task>
+memory prepare <task> [--force] [--limit 12] [--max-chars 4000]
+memory capture <content> [--force]
+memory behavior-choice --context <context> --chosen <option> [--rejected <option>] [--deferred <option>]
+memory consolidate [--recent 100]
+memory profile [--query <query>]
 memory compile <task> [--limit 12]
 memory reflect [--recent 50]
 memory serve [--host 127.0.0.1] [--port 8765]
 memory mcp
+```
+
+For model integration, prefer the orchestrated commands:
+
+```powershell
+uv run --python 3.12 memory prepare "我现在想继续做 Personal AI Memory OS，下一步怎么做？"
+uv run --python 3.12 memory capture "我决定 v0.1 先用 SQLite FTS5，不引入 Qdrant。"
+```
+
+`prepare` is the recommended pre-answer read path. It decides whether memory is needed, searches candidates, reranks them, applies type/size budgets, and returns a prompt-ready context package.
+
+`capture` is the recommended post-answer write path. It stores only stable user preferences, goals, project decisions, style guidance, or corrections unless `--force` is provided.
+
+Behavior choices help the runtime learn who the user is through decisions, not only explicit statements:
+
+```powershell
+uv run --python 3.12 memory behavior-choice `
+  --context "PAM-OS 技术路线" `
+  --chosen "SQLite FTS5" `
+  --rejected "Qdrant" `
+  --rejected "Neo4j" `
+  --reason "MVP 阶段先保持本地、轻量、可控"
+
+uv run --python 3.12 memory consolidate --recent 100
+uv run --python 3.12 memory profile
 ```
 
 ## REST API
@@ -47,6 +109,12 @@ Endpoints:
 
 - `POST /events`
 - `GET /memories/search?q=...`
+- `GET /memory/should-use?task=...`
+- `POST /context/prepare`
+- `POST /memory/capture`
+- `POST /behavior/choice`
+- `POST /memory/consolidate`
+- `GET /profile`
 - `POST /context/compile`
 - `POST /reflect`
 - `GET /health`
@@ -61,10 +129,31 @@ uv run --python 3.12 --extra mcp memory mcp
 
 MCP tools:
 
+- `prepare_context` (recommended before answering)
+- `capture_memory` (recommended after stable user/project information appears)
+- `record_behavior_choice` (record user choices as behavioral evidence)
+- `consolidate_memory` (promote evidence into profile traits)
+- `get_user_profile` (read ultra-long-term profile traits)
 - `remember`
 - `search_memory`
 - `compile_context`
 - `reflect`
+
+Recommended tool policy for MCP clients:
+
+```text
+Call prepare_context before answering when the user asks about their preferences,
+ongoing projects, prior decisions, long-term goals, personal style, or asks to
+continue something previously discussed. Do not call it for generic factual or
+one-off questions.
+
+Call capture_memory after the user reveals stable preferences, goals, project
+decisions, style guidance, or corrections. Do not capture transient chit-chat.
+
+Call record_behavior_choice when the user chooses, rejects, or defers options.
+Run consolidate_memory periodically to promote repeated evidence into stable
+profile traits.
+```
 
 ## Design Notes
 
