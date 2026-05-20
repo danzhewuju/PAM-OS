@@ -1,0 +1,4 @@
+interface:
+  display_name: "PAM-OS Memory"
+  short_description: "Use PAM-OS local memory from Codex."
+  default_prompt: "Use PAM-OS memory for this task."

@@ -1,21 +1,33 @@
 from __future__ import annotations
 
+import secrets
 from pathlib import Path
 from typing import Any
 
+from pam_os.config import load_config
 from pam_os.runtime import PersonalMemoryRuntime
 from pam_os.serialization import to_plain
 
 
 def create_app(db_path: Path | str | None = None, config=None):
     try:
-        from fastapi import FastAPI
+        from fastapi import Depends, FastAPI, HTTPException, status
+        from fastapi.security import HTTPBasic, HTTPBasicCredentials
         from pydantic import BaseModel, Field
     except ImportError as exc:
         raise RuntimeError('REST API dependencies are missing. Install with: pip install -e ".[api]"') from exc
 
+    config = config or load_config()
+    if config.server.auth_enabled and (not config.server.auth_username or not config.server.auth_password):
+        raise RuntimeError("REST API auth is enabled, but server.auth_username or server.auth_password is missing")
+
     runtime = PersonalMemoryRuntime(db_path=db_path, config=config)
-    app = FastAPI(title="Personal Memory Runtime", version="0.1.0")
+    security = HTTPBasic(auto_error=False)
+
+    def require_auth(credentials: HTTPBasicCredentials | None = Depends(security)) -> None:
+        ensure_basic_auth(credentials, config.server.auth_enabled, config.server.auth_username, config.server.auth_password)
+
+    app = FastAPI(title="Personal Memory Runtime", version="0.1.0", dependencies=[Depends(require_auth)])
 
     class EventRequest(BaseModel):
         content: str
@@ -152,3 +164,29 @@ def serve(*, host: str, port: int, db_path: Path | str | None = None, config=Non
         raise RuntimeError('REST API dependencies are missing. Install with: pip install -e ".[api]"') from exc
     app = create_app(db_path=db_path, config=config)
     uvicorn.run(app, host=host, port=port)
+
+
+def ensure_basic_auth(
+    credentials,
+    auth_enabled: bool,
+    auth_username: str,
+    auth_password: str,
+) -> None:
+    if not auth_enabled:
+        return
+    if credentials is None:
+        raise_auth_error()
+    username_ok = secrets.compare_digest(credentials.username, auth_username)
+    password_ok = secrets.compare_digest(credentials.password, auth_password)
+    if not (username_ok and password_ok):
+        raise_auth_error()
+
+
+def raise_auth_error() -> None:
+    from fastapi import HTTPException, status
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid REST API credentials",
+        headers={"WWW-Authenticate": "Basic"},
+    )

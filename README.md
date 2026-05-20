@@ -10,6 +10,9 @@ The MVP is local-first and deliberately small. The runtime stores raw events for
 
 ## Quick Start
 
+For a full usage guide, see [docs/usage.md](docs/usage.md).
+For model-client setup with Codex, Claude Code, CC Switch, MCP, and project Skills, see [docs/usage.md#65-加载到大模型客户端中使用](docs/usage.md#65-加载到大模型客户端中使用).
+
 ```powershell
 uv run --python 3.12 memory init
 uv run --python 3.12 memory add "我今天在思考 Personal AI Memory OS，倾向先做本地 MCP Server，不想一开始引入重型组件。"

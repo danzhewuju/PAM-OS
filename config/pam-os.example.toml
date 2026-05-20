@@ -11,6 +11,15 @@ db_path = ".pam-os/memory.sqlite3"
 host = "127.0.0.1"
 port = 8765
 
+# Optional HTTP Basic Auth for REST API.
+# Environment overrides:
+# - PAM_OS_AUTH_ENABLED
+# - PAM_OS_AUTH_USERNAME
+# - PAM_OS_AUTH_PASSWORD
+auth_enabled = false
+auth_username = ""
+auth_password = ""
+
 [context]
 # Default number of ordinary memories selected by prepare/compile flows.
 default_limit = 12

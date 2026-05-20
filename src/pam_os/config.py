@@ -16,6 +16,9 @@ class StorageConfig:
 class ServerConfig:
     host: str = "127.0.0.1"
     port: int = 8765
+    auth_enabled: bool = False
+    auth_username: str = ""
+    auth_password: str = ""
 
 
 @dataclass(frozen=True)
@@ -109,7 +112,13 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
     db_path = os.environ.get("PAM_OS_DB") or config.storage.db_path
     return AppConfig(
         storage=StorageConfig(db_path=db_path),
-        server=config.server,
+        server=ServerConfig(
+            host=config.server.host,
+            port=config.server.port,
+            auth_enabled=_env_bool("PAM_OS_AUTH_ENABLED", config.server.auth_enabled),
+            auth_username=os.environ.get("PAM_OS_AUTH_USERNAME", config.server.auth_username),
+            auth_password=os.environ.get("PAM_OS_AUTH_PASSWORD", config.server.auth_password),
+        ),
         context=config.context,
         consolidation=config.consolidation,
         orchestrator=config.orchestrator,
@@ -117,6 +126,13 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
         profile=config.profile,
         config_path=config.config_path,
     )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _resolve_path(path: str) -> Path:
