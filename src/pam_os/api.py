@@ -74,6 +74,10 @@ def create_app(db_path: Path | str | None = None, config=None):
     def health() -> dict[str, Any]:
         return {"ok": True, "db_path": str(runtime.db_path), "fts_available": runtime.store.fts_available}
 
+    @app.get("/storage/stats")
+    def get_storage_stats() -> dict[str, Any]:
+        return to_plain(runtime.get_storage_stats())
+
     @app.post("/events")
     def remember(request: EventRequest) -> dict[str, Any]:
         return to_plain(

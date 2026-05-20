@@ -7,7 +7,7 @@ from pam_os.config import AppConfig, default_db_path, load_config
 from pam_os.context import ContextCompiler
 from pam_os.consolidator import MemoryConsolidator
 from pam_os.extractor import Extractor, RuleBasedExtractor
-from pam_os.models import BehaviorEvent, ContextPackage, Event, Memory, SearchResult, new_id
+from pam_os.models import BehaviorEvent, ContextPackage, Event, Memory, SearchResult, StorageStats, new_id
 from pam_os.orchestrator import ContextBudget, MemoryOrchestrator
 from pam_os.store import MemoryStore
 
@@ -181,3 +181,6 @@ class PersonalMemoryRuntime:
         package = self.compiler.compile("Reflect on recent memories and summarize stable context.", results)
         self.store.save_context_package(package)
         return package
+
+    def get_storage_stats(self) -> StorageStats:
+        return self.store.get_storage_stats()

@@ -11,13 +11,14 @@ The MVP is local-first and deliberately small. The runtime stores raw events for
 ## Quick Start
 
 For a full usage guide, see [docs/usage.md](docs/usage.md).
-For model-client setup with Codex, Claude Code, CC Switch, MCP, and project Skills, see [docs/usage.md#65-加载到大模型客户端中使用](docs/usage.md#65-加载到大模型客户端中使用).
+For model-client setup with Codex, Claude Code, CC Switch, and project Skills, see [docs/usage.md#65-加载到大模型客户端中使用](docs/usage.md#65-加载到大模型客户端中使用).
 
 ```powershell
 uv run --python 3.12 memory init
-uv run --python 3.12 memory add "我今天在思考 Personal AI Memory OS，倾向先做本地 MCP Server，不想一开始引入重型组件。"
+uv run --python 3.12 memory add "我今天在思考 Personal AI Memory OS，倾向先做本地 REST 服务，不想一开始引入重型组件。"
 uv run --python 3.12 memory search "Personal AI Memory OS 下一步实现"
 uv run --python 3.12 memory compile "我现在想继续做 Personal AI Memory OS，下一步怎么做？"
+uv run --python 3.12 memory stats
 ```
 
 By default, data is stored in `.pam-os/memory.sqlite3`. Override it with:
@@ -72,7 +73,7 @@ memory profile [--query <query>]
 memory compile <task> [--limit 12]
 memory reflect [--recent 50]
 memory serve [--host 127.0.0.1] [--port 8765]
-memory mcp
+memory stats
 ```
 
 For model integration, prefer the orchestrated commands:
@@ -122,45 +123,9 @@ Endpoints:
 - `POST /reflect`
 - `GET /health`
 
-## MCP Adapter
-
-Install optional MCP dependencies:
-
-```powershell
-uv run --python 3.12 --extra mcp memory mcp
-```
-
-MCP tools:
-
-- `prepare_context` (recommended before answering)
-- `capture_memory` (recommended after stable user/project information appears)
-- `record_behavior_choice` (record user choices as behavioral evidence)
-- `consolidate_memory` (promote evidence into profile traits)
-- `get_user_profile` (read ultra-long-term profile traits)
-- `remember`
-- `search_memory`
-- `compile_context`
-- `reflect`
-
-Recommended tool policy for MCP clients:
-
-```text
-Call prepare_context before answering when the user asks about their preferences,
-ongoing projects, prior decisions, long-term goals, personal style, or asks to
-continue something previously discussed. Do not call it for generic factual or
-one-off questions.
-
-Call capture_memory after the user reveals stable preferences, goals, project
-decisions, style guidance, or corrections. Do not capture transient chit-chat.
-
-Call record_behavior_choice when the user chooses, rejects, or defers options.
-Run consolidate_memory periodically to promote repeated evidence into stable
-profile traits.
-```
-
 ## Design Notes
 
-- Runtime first, MCP second: the core memory logic is protocol-agnostic.
+- Runtime first: the core memory logic is protocol-agnostic.
 - SQLite first: no Kafka, Flink, Neo4j, Qdrant, or cloud service in v0.1.
 - Raw events are never discarded.
 - Rule-based extraction is the MVP default; an LLM extractor can be added behind the same interface later.

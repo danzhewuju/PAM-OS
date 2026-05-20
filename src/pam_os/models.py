@@ -125,3 +125,12 @@ class ConsolidationResult:
     traits_updated: list[ProfileTrait] = field(default_factory=list)
     memories_scanned: int = 0
     behavior_events_scanned: int = 0
+
+
+@dataclass(frozen=True)
+class StorageStats:
+    db_path: str
+    db_size_bytes: int
+    fts_available: bool
+    latest_write_at: str | None
+    tables: dict[str, dict[str, Any]] = field(default_factory=dict)

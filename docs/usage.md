@@ -14,7 +14,7 @@ Raw Event -> Memory Extraction -> SQLite Memory Store -> Retrieval -> Context Co
 - 在回答前自动准备与用户、项目、历史决策相关的记忆上下文。
 - 在回答后捕获稳定信息，而跳过短暂闲聊。
 - 通过行为选择逐步形成更稳定的用户画像。
-- 通过 CLI、REST API 或 MCP stdio 适配器接入其他工具。
+- 通过 CLI 或 REST API 接入其他工具。
 
 ## 1. 环境要求
 
@@ -22,7 +22,6 @@ Raw Event -> Memory Extraction -> SQLite Memory Store -> Retrieval -> Context Co
 - 推荐使用 `uv` 运行项目命令。
 - 默认不依赖外部服务。核心功能只使用 Python 标准库和 SQLite。
 - REST API 需要安装 `api` 可选依赖。
-- MCP 适配器需要安装 `mcp` 可选依赖。
 - 开发和测试需要安装 `dev` 可选依赖。
 
 ## 2. 快速开始
@@ -42,7 +41,7 @@ uv run --python 3.12 memory init
 写入一条记忆：
 
 ```powershell
-uv run --python 3.12 memory add "我今天在思考 Personal AI Memory OS，倾向先做本地 MCP Server，不想一开始引入重型组件。"
+uv run --python 3.12 memory add "我今天在思考 Personal AI Memory OS，倾向先做本地 REST 服务，不想一开始引入重型组件。"
 ```
 
 搜索记忆：
@@ -81,7 +80,6 @@ PAM-OS/
     context.py                上下文编译器
     consolidator.py           画像证据与画像特征巩固
     api.py                    REST API
-    mcp_server.py             MCP stdio 适配器
     config.py                 配置加载
     models.py                 数据模型
   tests/
@@ -292,11 +290,11 @@ uv run --python 3.12 memory profile --query "技术路线"
 PAM-OS 接入大模型客户端时，建议把职责拆成两层：
 
 ```text
-MCP Server = 给模型真实工具能力：prepare_context、capture_memory、search_memory 等
-Skill      = 给模型操作策略：什么时候读记忆、什么时候写记忆、什么不要保存
+REST API = 给模型真实工具能力：prepare_context、capture_memory、search_memory 等
+Skill    = 给模型操作策略：什么时候读记忆、什么时候写记忆、什么不要保存
 ```
 
-也就是说，MCP 负责“能调用”，Skill 负责“会判断”。只配 MCP，模型可能不知道什么时候该调用；只配 Skill，模型最多只能按说明运行 CLI，缺少结构化工具体验。最佳方式是 MCP + Skill 一起用。
+也就是说，REST 负责“能调用”，Skill 负责“会判断”。只配 Skill，模型最多只能按说明运行 CLI，缺少结构化工具体验。最佳方式是 CLI + REST + Skill 一起用。
 
 本仓库已经内置两个项目级 Skill：
 
@@ -332,35 +330,7 @@ List available skills
 Use $pam-os-memory. 继续做 PAM-OS，按我的历史偏好给下一步计划。
 ```
 
-Codex 的 MCP 配置可以放在用户级 `~/.codex/config.toml`，也可以在可信项目里放到 `.codex/config.toml`。示例：
-
-```toml
-[mcp_servers.pam-os]
-command = "uv"
-args = ["run", "--python", "3.12", "--extra", "mcp", "memory", "mcp"]
-cwd = "C:\\project\\PAM-OS"
-
-[mcp_servers.pam-os.env]
-PAM_OS_DB = "C:\\project\\PAM-OS\\.pam-os\\memory.sqlite3"
-PAM_OS_CONFIG = "C:\\project\\PAM-OS\\config\\pam-os.toml"
-```
-
-如果不想手动编辑配置，也可以用 Codex CLI 添加 MCP server。命令格式是：
-
-```powershell
-codex mcp add pam-os `
-  --env PAM_OS_DB=C:\project\PAM-OS\.pam-os\memory.sqlite3 `
-  --env PAM_OS_CONFIG=C:\project\PAM-OS\config\pam-os.toml `
-  -- uv run --python 3.12 --extra mcp memory mcp
-```
-
-配置完成后，在 Codex TUI 中使用：
-
-```text
-/mcp
-```
-
-确认 `pam-os` server 已启用。接下来 Codex 会根据 Skill 描述决定何时使用 PAM-OS；也可以在 prompt 中显式写 `$pam-os-memory`。
+Codex 直接使用 skill 即可。若要走 REST，把 skill 配置里的 `mode` 改成 `rest`，并确保 REST 服务已启动。
 
 #### Claude Code
 
@@ -378,82 +348,21 @@ List all available Skills
 
 如果 Claude Code 已经运行，修改或新增 Skill 后通常需要重启会话才能重新加载。
 
-Claude Code 的项目级 MCP 配置可以写入仓库根目录 `.mcp.json`。如果你想让团队共享同一套 PAM-OS MCP 配置，可以创建：
-
-```json
-{
-  "mcpServers": {
-    "pam-os": {
-      "type": "stdio",
-      "command": "uv",
-      "args": [
-        "run",
-        "--python",
-        "3.12",
-        "--extra",
-        "mcp",
-        "memory",
-        "mcp"
-      ],
-      "env": {
-        "PAM_OS_DB": "${PAM_OS_DB:-.pam-os/memory.sqlite3}",
-        "PAM_OS_CONFIG": "${PAM_OS_CONFIG:-config/pam-os.toml}"
-      }
-    }
-  }
-}
-```
-
-也可以用 Claude Code 命令添加：
-
-```powershell
-claude mcp add-json pam-os `
-  "{\"type\":\"stdio\",\"command\":\"uv\",\"args\":[\"run\",\"--python\",\"3.12\",\"--extra\",\"mcp\",\"memory\",\"mcp\"],\"env\":{\"PAM_OS_DB\":\"C:\\project\\PAM-OS\\.pam-os\\memory.sqlite3\",\"PAM_OS_CONFIG\":\"C:\\project\\PAM-OS\\config\\pam-os.toml\"}}"
-```
-
-进入 Claude Code 后，用：
-
-```text
-/mcp
-```
-
-检查 MCP server 状态。
+如果你更偏向 REST 方式，可以把 skill 配置里的 `mode` 设成 `rest`，然后确保 PAM-OS REST 服务已启动。
 
 #### CC Switch
 
-如果你使用 CC Switch，可以把 PAM-OS 当作一组“Skills + MCP Server”配置导入。推荐配置方式：
+如果你使用 CC Switch，可以把 PAM-OS 当作一组“Skills + REST API”配置导入。推荐配置方式：
 
 1. 在 CC Switch 的目标应用中选择 Codex 或 Claude Code。
 2. 在 Skills 管理中添加本仓库的 skill 目录：
    - Codex: `.agents/skills/pam-os-memory`
    - Claude Code: `.claude/skills/pam-os-memory`
-3. 在 MCP 管理中新增 stdio server：
-
-```json
-{
-  "name": "pam-os",
-  "type": "stdio",
-  "command": "uv",
-  "args": [
-    "run",
-    "--python",
-    "3.12",
-    "--extra",
-    "mcp",
-    "memory",
-    "mcp"
-  ],
-  "env": {
-    "PAM_OS_DB": "C:\\project\\PAM-OS\\.pam-os\\memory.sqlite3",
-    "PAM_OS_CONFIG": "C:\\project\\PAM-OS\\config\\pam-os.toml"
-  }
-}
-```
-
+3. 在 REST 配置中填写 PAM-OS 服务地址和认证信息。
 4. 同步或启用到对应客户端。
-5. 重启 Codex / Claude Code，并用 `/mcp` 或 “List available skills” 检查加载结果。
+5. 重启 Codex / Claude Code，并用“List available skills”检查加载结果。
 
-不同版本的 CC Switch UI 可能略有差异，但核心信息就是这三件事：Skill 目录、MCP server 命令、环境变量。
+不同版本的 CC Switch UI 可能略有差异，但核心信息就是这三件事：Skill 目录、REST 地址、环境变量。
 
 #### 建议给模型的系统提示片段
 
@@ -624,7 +533,7 @@ uv run --python 3.12 memory prepare "按我的偏好设计 PAM-OS 下一步"
 ```powershell
 uv run --python 3.12 memory prepare `
   "我继续做 PAM-OS，下一步怎么做？" `
-  --conversation-summary "前面讨论过本地优先、SQLite、MCP Server" `
+  --conversation-summary "前面讨论过本地优先、SQLite、REST API" `
   --limit 8 `
   --max-chars 3000 `
   --json
@@ -694,27 +603,15 @@ uv run --python 3.12 memory reflect --recent 50
 uv run --python 3.12 --extra api memory serve --host 127.0.0.1 --port 8765
 ```
 
-### 7.13 `mcp`
+### 7.13 `stats`
 
-启动 MCP stdio 适配器：
-
-```powershell
-uv run --python 3.12 --extra mcp memory mcp
-```
-
-如果需要指定数据库：
+查看存储概览：
 
 ```powershell
-uv run --python 3.12 --extra mcp memory --db C:\path\to\memory.sqlite3 mcp
+uv run --python 3.12 memory stats
 ```
 
-如果需要在 MCP 客户端中使用自定义配置，推荐通过环境变量传入：
-
-```powershell
-$env:PAM_OS_CONFIG = "C:\path\to\pam-os.toml"
-$env:PAM_OS_DB = "C:\path\to\memory.sqlite3"
-uv run --python 3.12 --extra mcp memory mcp
-```
+返回内容包括数据库路径、文件大小、FTS 状态、最近写入时间，以及各表的分表统计。
 
 ## 8. 显式 JSON 记忆写入
 
@@ -778,6 +675,7 @@ curl http://127.0.0.1:8765/health
 | `GET` | `/profile` | 查看画像。 |
 | `POST` | `/context/compile` | 低层上下文编译。 |
 | `POST` | `/reflect` | 最近记忆反思上下文。 |
+| `GET` | `/storage/stats` | 查看存储概览。 |
 
 写入事件：
 
@@ -823,90 +721,7 @@ REST 服务启动后，FastAPI 也会提供：
 http://127.0.0.1:8765/docs
 ```
 
-## 10. MCP 适配器
-
-安装并启动：
-
-```powershell
-uv run --python 3.12 --extra mcp memory mcp
-```
-
-MCP 暴露的工具：
-
-| 工具 | 推荐用途 |
-| --- | --- |
-| `prepare_context` | 回答前准备记忆上下文。优先使用。 |
-| `capture_memory` | 回答后捕获稳定用户/项目记忆。优先使用。 |
-| `record_behavior_choice` | 用户选择、拒绝或暂缓方案时记录行为证据。 |
-| `consolidate_memory` | 定期把记忆和行为事件巩固为画像。 |
-| `get_user_profile` | 读取稳定画像。 |
-| `remember` | 低层写入原始事件并抽取记忆。 |
-| `search_memory` | 低层搜索记忆。 |
-| `compile_context` | 低层上下文编译。 |
-| `reflect` | 从近期记忆生成反思上下文。 |
-
-### 10.1 推荐 MCP 使用策略
-
-回答前：
-
-```text
-当用户问题涉及个人偏好、长期目标、项目延续、历史决策、回答风格、之前说过的内容时，调用 prepare_context。
-普通事实问题、一次性代码语法问题、天气新闻等，不需要调用。
-```
-
-回答后：
-
-```text
-当用户透露稳定偏好、长期目标、项目决策、回答风格、纠正模型理解时，调用 capture_memory。
-临时闲聊、没有长期价值的短句，不捕获。
-```
-
-选择行为：
-
-```text
-当用户从多个选项中选择、拒绝或暂缓时，调用 record_behavior_choice。
-定期调用 consolidate_memory，把证据提升为画像。
-```
-
-### 10.2 客户端配置示例
-
-不同 MCP 客户端的配置文件位置不同，但命令可以使用类似结构：
-
-```json
-{
-  "mcpServers": {
-    "pam-os": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--python",
-        "3.12",
-        "--extra",
-        "mcp",
-        "memory",
-        "mcp"
-      ],
-      "cwd": "C:\\project\\PAM-OS",
-      "env": {
-        "PAM_OS_DB": "C:\\project\\PAM-OS\\.pam-os\\memory.sqlite3"
-      }
-    }
-  }
-}
-```
-
-如果使用自定义配置文件：
-
-```json
-{
-  "env": {
-    "PAM_OS_CONFIG": "C:\\project\\PAM-OS\\config\\pam-os.toml",
-    "PAM_OS_DB": "C:\\project\\PAM-OS\\.pam-os\\memory.sqlite3"
-  }
-}
-```
-
-## 11. Python API
+## 10. Python API
 
 可以直接在 Python 中使用核心运行时：
 
@@ -952,7 +767,7 @@ config = load_config("config/pam-os.toml")
 runtime = PersonalMemoryRuntime(config=config)
 ```
 
-## 12. 数据存储
+## 11. 数据存储
 
 PAM-OS 使用 SQLite。初始化时会创建这些表：
 
@@ -969,7 +784,7 @@ PAM-OS 使用 SQLite。初始化时会创建这些表：
 
 默认数据库位于 `.pam-os/memory.sqlite3`，该目录已被 `.gitignore` 忽略。
 
-## 13. 检索和抽取规则
+## 12. 检索和抽取规则
 
 ### 13.1 抽取
 
@@ -1022,7 +837,7 @@ content LIKE ... OR tags_json LIKE ...
 
 然后按类型限制和字符预算筛选，避免某一种记忆挤占上下文。
 
-## 14. 常见集成模式
+## 13. 常见集成模式
 
 ### 14.1 作为本地 AI 助手记忆层
 
@@ -1060,7 +875,7 @@ uv run --python 3.12 memory profile
 uv run --python 3.12 memory prepare "按我的偏好设计下一步"
 ```
 
-## 15. 开发和测试
+## 14. 开发和测试
 
 运行测试：
 
@@ -1081,7 +896,7 @@ uv run --python 3.12 memory --help
 uv run --python 3.12 memory prepare --help
 ```
 
-## 16. 常见问题
+## 15. 常见问题
 
 ### 16.1 `prepare` 没有返回上下文
 
@@ -1126,7 +941,7 @@ uv run --python 3.12 memory --help
 curl http://127.0.0.1:8765/health
 ```
 
-### 16.4 REST 或 MCP 报依赖缺失
+### 15.4 REST 报依赖缺失
 
 REST 需要：
 
@@ -1134,13 +949,7 @@ REST 需要：
 uv run --python 3.12 --extra api memory serve
 ```
 
-MCP 需要：
-
-```powershell
-uv run --python 3.12 --extra mcp memory mcp
-```
-
-### 16.5 PowerShell JSON 转义麻烦
+### 15.5 PowerShell JSON 转义麻烦
 
 复杂 JSON 可以优先写入文件，再用命令读取文件内容；或者在 Python API / REST 客户端里传结构化对象。简单 JSON 在 PowerShell 里通常需要转义双引号：
 
@@ -1148,7 +957,7 @@ uv run --python 3.12 --extra mcp memory mcp
 uv run --python 3.12 memory add "用户偏好本地可控系统。" --metadata-json "{\"explicit_memory\": true}"
 ```
 
-### 16.6 配置文件没有生效
+### 15.6 配置文件没有生效
 
 检查优先级：
 
@@ -1156,9 +965,9 @@ uv run --python 3.12 memory add "用户偏好本地可控系统。" --metadata-j
 CLI arguments > environment variables > config/pam-os.toml > built-in defaults
 ```
 
-如果设置了 `PAM_OS_DB`，它会覆盖 `[storage].db_path`。如果使用 MCP 客户端，建议直接在客户端配置中传 `PAM_OS_CONFIG` 和 `PAM_OS_DB` 环境变量。
+如果设置了 `PAM_OS_DB`，它会覆盖 `[storage].db_path`。
 
-## 17. 当前 MVP 边界
+## 16. 当前 MVP 边界
 
 - 抽取器是规则版，不调用 LLM。
 - 画像巩固也是规则版，主要覆盖偏好、回答风格、技术决策风格等有限模式。

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pam_os.api import create_app
 from pam_os.config import load_config
 from pam_os.runtime import PersonalMemoryRuntime
 
@@ -8,7 +9,7 @@ def test_memory_roundtrip(tmp_path):
     runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
 
     result = runtime.remember(
-        "我今天在思考 Personal AI Memory OS，倾向先做本地 MCP Server，不想一开始引入重型组件。"
+        "我今天在思考 Personal AI Memory OS，倾向先做本地 REST 服务，不想一开始引入重型组件。"
     )
 
     assert result["event"].content
@@ -153,3 +154,36 @@ default_limit = 1
     assert len(traits) == 1
     assert prepared.package is not None
     assert len(prepared.package.content) <= 180
+
+
+def test_storage_stats_include_table_breakdown(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+    runtime.remember("我偏好 self-host、开源、可控系统。")
+    runtime.capture_memory("我决定 Personal AI Memory OS v0.1 先用 SQLite FTS5，不引入 Qdrant。", force=True)
+    runtime.record_behavior_choice(
+        context="PAM-OS 技术路线",
+        chosen=["SQLite FTS5"],
+        rejected=["Qdrant"],
+        reason="本地轻量可控",
+    )
+
+    stats = runtime.get_storage_stats()
+
+    assert stats.db_path.endswith("memory.sqlite3")
+    assert stats.db_size_bytes >= 0
+    assert "memories" in stats.tables
+    assert stats.tables["events"]["count"] >= 1
+    assert stats.tables["memories"]["count"] >= 1
+    assert "by_type" in stats.tables["memories"]
+    assert "behavior_events" in stats.tables
+    assert "unconsolidated_count" in stats.tables["behavior_events"]
+
+
+def test_storage_stats_exposed_by_rest_api(tmp_path):
+    app = create_app(db_path=tmp_path / "memory.sqlite3")
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/storage/stats")
+    payload = route.endpoint()
+
+    assert payload["db_path"].endswith("memory.sqlite3")
+    assert "tables" in payload
+    assert "memories" in payload["tables"]

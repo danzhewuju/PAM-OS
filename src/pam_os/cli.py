@@ -85,6 +85,10 @@ def main(argv: list[str] | None = None) -> int:
             traits = runtime.get_user_profile(limit=args.limit, query=args.query)
             print_json(to_plain(traits))
             return 0
+        if args.command == "stats":
+            stats = runtime.get_storage_stats()
+            print_json(to_plain(stats))
+            return 0
         if args.command == "compile":
             package = runtime.compile_context(args.task, limit=args.limit)
             print(package.content)
@@ -97,11 +101,6 @@ def main(argv: list[str] | None = None) -> int:
             from pam_os.api import serve
 
             serve(host=args.host or config.server.host, port=args.port or config.server.port, db_path=args.db, config=config)
-            return 0
-        if args.command == "mcp":
-            from pam_os.mcp_server import run
-
-            run(db_path=args.db)
             return 0
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -165,6 +164,8 @@ def build_parser() -> argparse.ArgumentParser:
     profile.add_argument("--limit", type=int)
     profile.add_argument("--query")
 
+    subparsers.add_parser("stats", help="Show storage statistics")
+
     compile_cmd = subparsers.add_parser("compile", help="Compile a prompt-ready context package")
     compile_cmd.add_argument("task")
     compile_cmd.add_argument("--limit", type=int)
@@ -175,8 +176,6 @@ def build_parser() -> argparse.ArgumentParser:
     serve = subparsers.add_parser("serve", help="Run REST API server")
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
-
-    subparsers.add_parser("mcp", help="Run MCP stdio adapter")
     return parser
 
 

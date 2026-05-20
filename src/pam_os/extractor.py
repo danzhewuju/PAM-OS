@@ -111,7 +111,6 @@ class RuleBasedExtractor:
         tags = {memory_type}
         keyword_map = {
             "self-host": ["self-host", "自托管", "本地", "可控"],
-            "mcp": ["mcp", "MCP"],
             "memory-os": ["Memory OS", "Memory", "记忆"],
             "infra": ["Flink", "Kafka", "Qdrant", "Neo4j", "infra", "基础设施"],
             "engineering": ["工程", "实现", "落地", "技术"],

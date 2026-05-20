@@ -6,7 +6,16 @@ from pathlib import Path
 from typing import Any
 
 from pam_os.config import RetrievalConfig
-from pam_os.models import BehaviorEvent, ContextPackage, Event, Memory, ProfileEvidence, ProfileTrait, SearchResult
+from pam_os.models import (
+    BehaviorEvent,
+    ContextPackage,
+    Event,
+    Memory,
+    ProfileEvidence,
+    ProfileTrait,
+    SearchResult,
+    StorageStats,
+)
 
 
 class MemoryStore:
@@ -257,6 +266,43 @@ class MemoryStore:
                 (limit,),
             ).fetchall()
         return [self._row_to_behavior_event(row) for row in rows]
+
+    def get_storage_stats(self) -> StorageStats:
+        db_size_bytes = 0
+        try:
+            db_size_bytes = self.db_path.stat().st_size
+        except FileNotFoundError:
+            pass
+
+        with self.connect() as conn:
+            tables = {
+                "events": {"count": self._count_rows(conn, "events")},
+                "memories": {
+                    "count": self._count_rows(conn, "memories"),
+                    "by_type": self._grouped_counts(conn, "memories", "type"),
+                    "unconsolidated_count": self._count_unconsolidated_memories(conn),
+                },
+                "memory_links": {"count": self._count_rows(conn, "memory_links")},
+                "context_packages": {"count": self._count_rows(conn, "context_packages")},
+                "profile_evidence": {"count": self._count_rows(conn, "profile_evidence")},
+                "profile_traits": {
+                    "count": self._count_rows(conn, "profile_traits"),
+                    "by_status": self._grouped_counts(conn, "profile_traits", "status"),
+                },
+                "behavior_events": {
+                    "count": self._count_rows(conn, "behavior_events"),
+                    "unconsolidated_count": self._count_unconsolidated_behavior_events(conn),
+                },
+            }
+            latest_write_at = self._latest_write_at(conn)
+
+        return StorageStats(
+            db_path=str(self.db_path),
+            db_size_bytes=db_size_bytes,
+            fts_available=self.fts_available,
+            latest_write_at=latest_write_at,
+            tables=tables,
+        )
 
     def mark_behavior_events_consolidated(self, ids: list[str], timestamp: str) -> None:
         if not ids:
@@ -544,6 +590,66 @@ class MemoryStore:
             source_ref=row["source_ref"],
             created_at=row["created_at"],
         )
+
+    def _count_rows(self, conn: sqlite3.Connection, table: str) -> int:
+        row = conn.execute(f"SELECT count(*) AS count FROM {table}").fetchone()
+        return int(row["count"] if row else 0)
+
+    def _grouped_counts(self, conn: sqlite3.Connection, table: str, column: str) -> dict[str, int]:
+        rows = conn.execute(
+            f"""
+            SELECT {column} AS value, count(*) AS count
+            FROM {table}
+            GROUP BY {column}
+            ORDER BY count DESC, value ASC
+            """
+        ).fetchall()
+        return {str(row["value"]): int(row["count"]) for row in rows}
+
+    def _count_unconsolidated_memories(self, conn: sqlite3.Connection) -> int:
+        row = conn.execute(
+            """
+            SELECT count(*) AS count
+            FROM memories m
+            WHERE NOT EXISTS (
+              SELECT 1 FROM profile_evidence e WHERE e.source_memory_id = m.id
+            )
+            """
+        ).fetchone()
+        return int(row["count"] if row else 0)
+
+    def _count_unconsolidated_behavior_events(self, conn: sqlite3.Connection) -> int:
+        row = conn.execute(
+            """
+            SELECT count(*) AS count
+            FROM behavior_events
+            WHERE consolidated_at IS NULL
+            """
+        ).fetchone()
+        return int(row["count"] if row else 0)
+
+    def _latest_write_at(self, conn: sqlite3.Connection) -> str | None:
+        row = conn.execute(
+            """
+            SELECT MAX(ts) AS latest_write_at
+            FROM (
+                SELECT created_at AS ts FROM events
+                UNION ALL
+                SELECT updated_at AS ts FROM memories
+                UNION ALL
+                SELECT created_at AS ts FROM memory_links
+                UNION ALL
+                SELECT created_at AS ts FROM context_packages
+                UNION ALL
+                SELECT created_at AS ts FROM profile_evidence
+                UNION ALL
+                SELECT updated_at AS ts FROM profile_traits
+                UNION ALL
+                SELECT created_at AS ts FROM behavior_events
+            )
+            """
+        ).fetchone()
+        return row["latest_write_at"] if row and row["latest_write_at"] else None
 
 
 def re_split_words(query: str) -> list[str]:

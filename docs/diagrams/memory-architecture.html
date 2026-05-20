@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PAM-OS Memory Architecture</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3f5f8;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #5d6b7c;
+      --line: #d9e1ea;
+      --accent: #1e7f68;
+      --accent-2: #b65c2a;
+      --blue: #2e6da4;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+      line-height: 1.5;
+    }
+
+    header {
+      padding: 28px 36px 18px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .subtitle {
+      max-width: 960px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(680px, 1fr) 360px;
+      gap: 18px;
+      padding: 18px;
+      min-height: calc(100vh - 108px);
+    }
+
+    .diagram-shell,
+    aside {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 8px 28px rgba(31, 45, 61, 0.06);
+    }
+
+    .diagram-shell {
+      overflow: auto;
+      padding: 18px;
+    }
+
+    .diagram {
+      min-width: 1180px;
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .box {
+      fill: #f6f8fb;
+      stroke: #7d91ad;
+      stroke-width: 1.4;
+      rx: 7;
+    }
+
+    .entry { fill: #ffffff; stroke: #8aa0bd; }
+    .write-box { fill: #eef7f1; stroke: #65a37f; }
+    .upgrade-box { fill: #fff4df; stroke: #d4933a; }
+    .read-box { fill: #eaf2fb; stroke: #6b93bf; }
+    .store-box { fill: #f6f8fb; stroke: #a8b4c3; }
+    .answer-box { fill: #f8f0f6; stroke: #b97ca9; }
+    .group {
+      fill: rgba(255, 255, 255, 0.72);
+      stroke: #d7e0ea;
+      stroke-width: 1.2;
+      rx: 10;
+    }
+
+    .label-text {
+      fill: #172033;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .small-text {
+      fill: #4f6072;
+      font-size: 11px;
+    }
+
+    .group-title {
+      fill: #2e6da4;
+      font-size: 13px;
+      font-weight: 760;
+    }
+
+    .arrow {
+      fill: none;
+      stroke: #566b84;
+      stroke-width: 1.6;
+      marker-end: url(#arrowhead);
+    }
+
+    .dashed {
+      stroke-dasharray: 6 5;
+    }
+
+    .upgrade-arrow {
+      stroke: #b65c2a;
+      stroke-width: 2;
+    }
+
+    .read-arrow {
+      stroke: #2e6da4;
+    }
+
+    .write-arrow {
+      stroke: #1e7f68;
+    }
+
+    aside {
+      padding: 20px;
+      align-self: start;
+      position: sticky;
+      top: 18px;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 14px;
+      color: var(--blue);
+      letter-spacing: 0;
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 19px;
+    }
+
+    li {
+      margin: 8px 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    strong {
+      color: var(--ink);
+    }
+
+    code {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: #eef2f6;
+      color: #253348;
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 13px;
+    }
+
+    .legend {
+      display: grid;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .swatch {
+      width: 18px;
+      height: 12px;
+      border-radius: 3px;
+      border: 1px solid rgba(23, 32, 51, 0.2);
+      flex: 0 0 auto;
+    }
+
+    .write { background: #eef7f1; }
+    .upgrade { background: #fff4df; }
+    .read { background: #eaf2fb; }
+    .store { background: #f6f8fb; }
+
+    @media (max-width: 1120px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      aside {
+        position: static;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>PAM-OS Memory 架构图</h1>
+    <p class="subtitle">
+      这张图把 Memory Runtime 拆成写入、升级、读取三条路径；重点是“普通记忆”如何经过 evidence 层，逐步升级成可解释、可注入的长期 profile trait。
+    </p>
+  </header>
+
+  <main>
+    <section class="diagram-shell" aria-label="PAM-OS memory architecture diagram">
+      <svg class="diagram" viewBox="0 0 1220 760" role="img" aria-label="PAM-OS memory architecture">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#566b84"></polygon>
+          </marker>
+        </defs>
+
+        <rect class="group" x="24" y="28" width="180" height="258"></rect>
+        <text class="group-title" x="42" y="56">入口</text>
+        <rect class="box entry" x="44" y="78" width="140" height="44"></rect>
+        <text class="label-text" x="72" y="104">User / Codex</text>
+        <rect class="box entry" x="44" y="146" width="140" height="48"></rect>
+        <text class="label-text" x="70" y="166">Codex Skill</text>
+        <text class="small-text" x="64" y="183">pam-os-memory</text>
+        <rect class="box entry" x="44" y="218" width="62" height="42"></rect>
+        <text class="label-text" x="63" y="244">CLI</text>
+        <rect class="box entry" x="122" y="218" width="62" height="42"></rect>
+        <text class="label-text" x="139" y="244">REST</text>
+
+        <rect class="group" x="246" y="28" width="198" height="348"></rect>
+        <text class="group-title" x="266" y="56">PersonalMemoryRuntime</text>
+        <rect class="box" x="274" y="80" width="140" height="48"></rect>
+        <text class="label-text" x="290" y="109">Orchestrator</text>
+        <rect class="box" x="274" y="152" width="140" height="48"></rect>
+        <text class="label-text" x="304" y="181">Extractor</text>
+        <rect class="box" x="274" y="224" width="140" height="48"></rect>
+        <text class="label-text" x="296" y="253">Consolidator</text>
+        <rect class="box" x="274" y="296" width="140" height="48"></rect>
+        <text class="label-text" x="309" y="325">Compiler</text>
+
+        <rect class="group" x="488" y="28" width="210" height="258"></rect>
+        <text class="group-title" x="508" y="56">写入路径</text>
+        <rect class="box write-box" x="518" y="80" width="150" height="48"></rect>
+        <text class="label-text" x="575" y="100">events</text>
+        <text class="small-text" x="540" y="117">raw immutable input</text>
+        <rect class="box write-box" x="518" y="152" width="150" height="48"></rect>
+        <text class="label-text" x="566" y="172">memories</text>
+        <text class="small-text" x="546" y="189">searchable facts</text>
+        <rect class="box write-box" x="518" y="224" width="150" height="48"></rect>
+        <text class="label-text" x="548" y="244">behavior_events</text>
+        <text class="small-text" x="536" y="261">chosen / rejected</text>
+
+        <rect class="group" x="744" y="28" width="230" height="348"></rect>
+        <text class="group-title" x="764" y="56">升级路径：consolidate</text>
+        <rect class="box upgrade-box" x="784" y="80" width="150" height="48"></rect>
+        <text class="label-text" x="800" y="100">scan recent rows</text>
+        <text class="small-text" x="805" y="117">unconsolidated only</text>
+        <path class="box upgrade-box" d="M859 151 L934 176 L859 201 L784 176 Z"></path>
+        <text class="label-text" x="813" y="181">trait candidate?</text>
+        <rect class="box upgrade-box" x="784" y="224" width="150" height="48"></rect>
+        <text class="label-text" x="806" y="244">profile_evidence</text>
+        <text class="small-text" x="807" y="261">why we believe it</text>
+        <rect class="box upgrade-box" x="784" y="296" width="150" height="48"></rect>
+        <text class="label-text" x="805" y="316">profile_traits</text>
+        <text class="small-text" x="797" y="333">confidence + stability</text>
+
+        <rect class="group" x="744" y="414" width="230" height="278"></rect>
+        <text class="group-title" x="764" y="442">读取路径：prepare</text>
+        <path class="box read-box" d="M859 467 L934 492 L859 517 L784 492 Z"></path>
+        <text class="label-text" x="809" y="497">should use memory?</text>
+        <rect class="box read-box" x="784" y="540" width="150" height="48"></rect>
+        <text class="label-text" x="812" y="560">search_memory</text>
+        <text class="small-text" x="816" y="577">FTS + filters</text>
+        <rect class="box read-box" x="784" y="616" width="150" height="48"></rect>
+        <text class="label-text" x="811" y="636">rerank + budget</text>
+        <text class="small-text" x="807" y="653">profile traits first</text>
+
+        <rect class="group" x="1016" y="28" width="180" height="236"></rect>
+        <text class="group-title" x="1036" y="56">SQLite MemoryStore</text>
+        <rect class="box store-box" x="1040" y="86" width="132" height="58"></rect>
+        <text class="label-text" x="1056" y="110">memory.sqlite3</text>
+        <text class="small-text" x="1052" y="127">events / memories</text>
+        <rect class="box store-box" x="1040" y="174" width="132" height="46"></rect>
+        <text class="label-text" x="1076" y="201">FTS5</text>
+
+        <rect class="box read-box" x="1024" y="616" width="150" height="48"></rect>
+        <text class="label-text" x="1042" y="636">context_packages</text>
+        <text class="small-text" x="1048" y="653">prompt-ready context</text>
+        <rect class="box answer-box" x="1024" y="690" width="150" height="48"></rect>
+        <text class="label-text" x="1053" y="710">Codex answer</text>
+        <text class="small-text" x="1048" y="727">with memory context</text>
+
+        <path class="arrow" d="M114 122 V146"></path>
+        <path class="arrow" d="M106 170 C150 170 146 238 106 238"></path>
+        <path class="arrow dashed" d="M122 170 C198 170 198 238 122 238"></path>
+        <path class="arrow" d="M184 238 C226 238 230 104 274 104"></path>
+        <path class="arrow dashed" d="M184 238 C226 238 230 104 274 104"></path>
+        <path class="arrow write-arrow" d="M414 104 C456 104 470 176 518 176"></path>
+        <path class="arrow write-arrow" d="M414 104 C468 104 462 248 518 248"></path>
+        <path class="arrow write-arrow" d="M414 176 H518"></path>
+        <path class="arrow write-arrow" d="M593 128 V152"></path>
+
+        <path class="arrow upgrade-arrow" d="M414 248 H784"></path>
+        <path class="arrow upgrade-arrow" d="M668 176 C714 176 724 104 784 104"></path>
+        <path class="arrow upgrade-arrow" d="M668 248 C714 248 724 104 784 104"></path>
+        <path class="arrow upgrade-arrow" d="M859 128 V151"></path>
+        <path class="arrow upgrade-arrow" d="M859 201 V224"></path>
+        <path class="arrow upgrade-arrow" d="M859 272 V296"></path>
+        <path class="arrow upgrade-arrow" d="M934 320 C970 320 970 248 934 248"></path>
+
+        <path class="arrow read-arrow" d="M414 104 C614 104 624 492 784 492"></path>
+        <path class="arrow read-arrow" d="M859 517 V540"></path>
+        <path class="arrow read-arrow" d="M668 176 C708 176 722 564 784 564"></path>
+        <path class="arrow read-arrow" d="M934 320 C996 320 996 640 934 640"></path>
+        <path class="arrow read-arrow" d="M859 588 V616"></path>
+        <path class="arrow read-arrow" d="M934 640 H1024"></path>
+        <path class="arrow read-arrow" d="M1099 664 V690"></path>
+
+        <path class="arrow dashed" d="M668 104 H1040"></path>
+        <path class="arrow dashed" d="M934 248 C1004 248 1004 115 1040 115"></path>
+        <path class="arrow dashed" d="M668 176 C1000 176 1000 197 1040 197"></path>
+        <path class="arrow dashed" d="M1099 616 V220"></path>
+      </svg>
+    </section>
+
+    <aside>
+      <h2>Memory 升级怎么看</h2>
+      <ul>
+        <li><strong>events</strong> 是原始证据，不应该直接变成“用户画像”。</li>
+        <li><strong>memories</strong> 是可搜索事实，例如项目决策、偏好、目标、风格。</li>
+        <li><strong>behavior_events</strong> 记录用户选择、拒绝、推迟什么，这是理解决策风格的关键入口。</li>
+        <li><strong>profile_evidence</strong> 是升级缓冲层，说明某个长期判断从哪里来。</li>
+        <li><strong>profile_traits</strong> 才是长期画像，会被 <code>prepare_context</code> 优先注入。</li>
+      </ul>
+
+      <h3>当前 v0 规则</h3>
+      <ul>
+        <li>偏好、风格、目标、项目决策类 memory 可生成 evidence。</li>
+        <li>行为选择里出现“选轻量本地方案、拒绝重型基础设施”会升级为 decision style。</li>
+        <li>同一个 <code>trait_key</code> 会合并更新，提升 <code>confidence</code> 和 <code>stability</code>。</li>
+      </ul>
+
+      <h3>图例</h3>
+      <div class="legend">
+        <div class="legend-item"><span class="swatch write"></span>写入层：捕获事实和行为</div>
+        <div class="legend-item"><span class="swatch upgrade"></span>升级层：证据化、合并、增强</div>
+        <div class="legend-item"><span class="swatch read"></span>读取层：为回答准备上下文</div>
+        <div class="legend-item"><span class="swatch store"></span>存储层：SQLite + FTS5</div>
+      </div>
+    </aside>
+  </main>
+</body>
+</html>
