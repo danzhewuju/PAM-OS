@@ -8,10 +8,24 @@ Raw Event -> Memory Extraction -> SQLite Memory Store -> Retrieval -> Context Co
 
 The MVP is local-first and deliberately small. The runtime stores raw events forever, extracts structured memories, retrieves them with SQLite FTS5 when available, and compiles a prompt-ready context package.
 
+## Architecture Diagram
+
+Open the interactive architecture diagram: [docs/diagrams/memory-architecture.html](docs/diagrams/memory-architecture.html).
+
 ## Quick Start
 
 For a full usage guide, see [docs/usage.md](docs/usage.md).
 For model-client setup with Codex, Claude Code, CC Switch, and project Skills, see [docs/usage.md#65-加载到大模型客户端中使用](docs/usage.md#65-加载到大模型客户端中使用).
+
+Install the PAM-OS memory skill for Codex or other supported clients:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-skill.sh | bash
+```
+
+The installer writes the skill to your user-level client directory and uses `~/.pam-os/memory.sqlite3` as the default shared local memory database.
+
+Use the local CLI directly:
 
 ```powershell
 uv run --python 3.12 memory init
