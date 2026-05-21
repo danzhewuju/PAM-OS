@@ -34,3 +34,40 @@ def test_rest_api_auth_enabled_requires_credentials():
 
     with pytest.raises(RuntimeError, match="auth_username or server.auth_password"):
         create_app(db_path=None, config=config)
+
+
+def test_clear_memory_rest_api_requires_confirmation(tmp_path):
+    app = create_app(db_path=tmp_path / "memory.sqlite3")
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/clear")
+    request = type("ClearRequest", (), {"confirm": False})()
+
+    with pytest.raises(Exception) as exc:
+        route.endpoint(request)
+
+    assert "400" in str(exc.value)
+
+
+def test_clear_memory_rest_api_clears_storage(tmp_path):
+    app = create_app(db_path=tmp_path / "memory.sqlite3")
+    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/capture")
+    clear_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/clear")
+    capture_request = type(
+        "CaptureRequest",
+        (),
+        {
+            "content": "我偏好 self-host、开源、可控系统。",
+            "source": "conversation",
+            "source_ref": None,
+            "metadata": {},
+            "force": True,
+        },
+    )()
+    clear_request = type("ClearRequest", (), {"confirm": True})()
+
+    capture_route.endpoint(capture_request)
+    payload = clear_route.endpoint(clear_request)
+
+    assert payload["deleted_counts"]["events"] == 1
+    assert payload["deleted_counts"]["memories"] >= 1
+    assert payload["storage_stats"]["tables"]["events"]["count"] == 0
+    assert payload["storage_stats"]["tables"]["memories"]["count"] == 0

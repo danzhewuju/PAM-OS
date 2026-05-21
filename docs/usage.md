@@ -613,6 +613,16 @@ uv run --python 3.12 memory stats
 
 返回内容包括数据库路径、文件大小、FTS 状态、最近写入时间，以及各表的分表统计。
 
+### 7.14 `clear`
+
+清空所有记忆相关数据，包括原始事件、结构化记忆、画像、行为事件和上下文包：
+
+```powershell
+uv run --python 3.12 memory clear --confirm
+```
+
+`clear` 是不可逆操作，必须显式传入 `--confirm`，否则命令会拒绝执行。
+
 ## 8. 显式 JSON 记忆写入
 
 规则抽取器支持直接输入 JSON 或 fenced JSON。这样可以精确控制类型、重要性、置信度和标签。
@@ -676,6 +686,7 @@ curl http://127.0.0.1:8765/health
 | `POST` | `/context/compile` | 低层上下文编译。 |
 | `POST` | `/reflect` | 最近记忆反思上下文。 |
 | `GET` | `/storage/stats` | 查看存储概览。 |
+| `POST` | `/memory/clear` | 清空所有记忆、画像、上下文包和原始事件。 |
 
 写入事件：
 
@@ -714,6 +725,16 @@ curl -X POST http://127.0.0.1:8765/behavior/choice `
 ```powershell
 curl "http://127.0.0.1:8765/profile?limit=10&q=self-host"
 ```
+
+清空所有记忆数据：
+
+```powershell
+curl -X POST http://127.0.0.1:8765/memory/clear `
+  -H "Content-Type: application/json" `
+  -d "{\"confirm\":true}"
+```
+
+`/memory/clear` 是不可逆操作，必须显式传入 `confirm: true`，否则会返回 `400`。
 
 REST 服务启动后，FastAPI 也会提供：
 
@@ -756,6 +777,7 @@ if prepared.package:
 | `get_user_profile(...)` | 读取画像。 |
 | `compile_context(task, ...)` | 低层上下文编译。 |
 | `reflect(recent=50)` | 从近期记忆编译反思上下文。 |
+| `clear_memory()` | 清空所有记忆相关数据并返回删除统计。 |
 
 使用配置对象：
 
@@ -974,6 +996,6 @@ CLI arguments > environment variables > config/pam-os.toml > built-in defaults
 - 检索是 SQLite FTS5 或 LIKE，不包含向量数据库。
 - `memory_links` 表已预留，但当前没有复杂图谱逻辑。
 - 上下文预算按字符裁剪，不是精确 token 预算。
-- 原始事件会保存，不提供自动遗忘策略。
+- 原始事件会保存；如需手动遗忘，可通过 REST `/memory/clear` 一次性清空全部记忆数据。
 
 这些边界也是当前版本的设计取舍：先保持本地、轻量、可运行，后续可以在相同接口后面替换为 LLM 抽取器、向量检索或更复杂的画像巩固逻辑。

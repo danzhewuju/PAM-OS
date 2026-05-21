@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pam_os.api import create_app
+from pam_os.cli import main
 from pam_os.config import load_config
 from pam_os.runtime import PersonalMemoryRuntime
 
@@ -187,3 +188,48 @@ def test_storage_stats_exposed_by_rest_api(tmp_path):
     assert payload["db_path"].endswith("memory.sqlite3")
     assert "tables" in payload
     assert "memories" in payload["tables"]
+
+
+def test_clear_memory_removes_all_stored_memory_data(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+    runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
+    runtime.record_behavior_choice(
+        context="PAM-OS 技术路线",
+        chosen=["SQLite FTS5"],
+        rejected=["Qdrant"],
+        reason="本地轻量可控",
+    )
+    runtime.consolidate_memory(recent=100)
+    runtime.compile_context("我继续做 PAM-OS，下一步怎么做？")
+
+    cleared = runtime.clear_memory()
+    stats = cleared["storage_stats"]
+
+    assert cleared["deleted_counts"]["events"] >= 1
+    assert cleared["deleted_counts"]["memories"] >= 1
+    for table_stats in stats.tables.values():
+        assert table_stats["count"] == 0
+    assert runtime.search_memory("self-host") == []
+
+
+def test_clear_cli_requires_confirmation(tmp_path, capsys):
+    exit_code = main(["--db", str(tmp_path / "memory.sqlite3"), "clear"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "clear requires --confirm" in captured.err
+
+
+def test_clear_cli_clears_storage(tmp_path, capsys):
+    db_path = tmp_path / "memory.sqlite3"
+    runtime = PersonalMemoryRuntime(db_path=db_path)
+    runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
+
+    exit_code = main(["--db", str(db_path), "clear", "--confirm"])
+
+    captured = capsys.readouterr()
+    stats = PersonalMemoryRuntime(db_path=db_path).get_storage_stats()
+    assert exit_code == 0
+    assert '"deleted_counts"' in captured.out
+    assert stats.tables["events"]["count"] == 0
+    assert stats.tables["memories"]["count"] == 0

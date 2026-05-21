@@ -184,3 +184,10 @@ class PersonalMemoryRuntime:
 
     def get_storage_stats(self) -> StorageStats:
         return self.store.get_storage_stats()
+
+    def clear_memory(self) -> dict[str, Any]:
+        deleted_counts = self.store.clear_all()
+        return {
+            "deleted_counts": deleted_counts,
+            "storage_stats": self.get_storage_stats(),
+        }

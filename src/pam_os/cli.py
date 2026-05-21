@@ -89,6 +89,12 @@ def main(argv: list[str] | None = None) -> int:
             stats = runtime.get_storage_stats()
             print_json(to_plain(stats))
             return 0
+        if args.command == "clear":
+            if not args.confirm:
+                raise ValueError("clear requires --confirm")
+            result = runtime.clear_memory()
+            print_json(to_plain(result))
+            return 0
         if args.command == "compile":
             package = runtime.compile_context(args.task, limit=args.limit)
             print(package.content)
@@ -165,6 +171,9 @@ def build_parser() -> argparse.ArgumentParser:
     profile.add_argument("--query")
 
     subparsers.add_parser("stats", help="Show storage statistics")
+
+    clear = subparsers.add_parser("clear", help="Clear all memory data")
+    clear.add_argument("--confirm", action="store_true", help="Required confirmation for irreversible deletion")
 
     compile_cmd = subparsers.add_parser("compile", help="Compile a prompt-ready context package")
     compile_cmd.add_argument("task")

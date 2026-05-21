@@ -313,6 +313,25 @@ class MemoryStore:
                 [(timestamp, event_id) for event_id in ids],
             )
 
+    def clear_all(self) -> dict[str, int]:
+        tables = [
+            "memory_links",
+            "context_packages",
+            "profile_evidence",
+            "profile_traits",
+            "behavior_events",
+            "memories",
+            "events",
+        ]
+        with self.connect() as conn:
+            deleted_counts = {table: self._count_rows(conn, table) for table in tables}
+            for table in tables:
+                conn.execute(f"DELETE FROM {table}")
+            if self.fts_available:
+                deleted_counts["memories_fts"] = self._count_fts_rows(conn)
+                conn.execute("DELETE FROM memories_fts")
+        return deleted_counts
+
     def add_profile_evidence(self, evidence: list[ProfileEvidence]) -> None:
         if not evidence:
             return
@@ -593,6 +612,13 @@ class MemoryStore:
 
     def _count_rows(self, conn: sqlite3.Connection, table: str) -> int:
         row = conn.execute(f"SELECT count(*) AS count FROM {table}").fetchone()
+        return int(row["count"] if row else 0)
+
+    def _count_fts_rows(self, conn: sqlite3.Connection) -> int:
+        try:
+            row = conn.execute("SELECT count(*) AS count FROM memories_fts").fetchone()
+        except sqlite3.OperationalError:
+            return 0
         return int(row["count"] if row else 0)
 
     def _grouped_counts(self, conn: sqlite3.Connection, table: str, column: str) -> dict[str, int]:

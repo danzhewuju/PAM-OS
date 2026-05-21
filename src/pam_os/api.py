@@ -70,6 +70,9 @@ def create_app(db_path: Path | str | None = None, config=None):
     class ReflectRequest(BaseModel):
         recent: int = 50
 
+    class ClearMemoryRequest(BaseModel):
+        confirm: bool = False
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {"ok": True, "db_path": str(runtime.db_path), "fts_available": runtime.store.fts_available}
@@ -77,6 +80,12 @@ def create_app(db_path: Path | str | None = None, config=None):
     @app.get("/storage/stats")
     def get_storage_stats() -> dict[str, Any]:
         return to_plain(runtime.get_storage_stats())
+
+    @app.post("/memory/clear")
+    def clear_memory(request: ClearMemoryRequest) -> dict[str, Any]:
+        if not request.confirm:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="confirm must be true")
+        return to_plain(runtime.clear_memory())
 
     @app.post("/events")
     def remember(request: EventRequest) -> dict[str, Any]:
