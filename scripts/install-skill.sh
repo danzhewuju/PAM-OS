@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 SKILL_NAME="${PAM_OS_SKILL_NAME:-pam-os-memory}"
 DEFAULT_REPO_URL="${PAM_OS_REPO_URL:-https://github.com/danzhewuju/PAM-OS.git}"
-DEFAULT_REPO_REF="${PAM_OS_REPO_REF:-main}"
+DEFAULT_REPO_REF="${PAM_OS_REPO_REF:-master}"
 
 CODEX_DEFAULT_DIR="${CODEX_HOME:-$HOME/.codex}/skills/$SKILL_NAME"
 CLAUDE_DEFAULT_DIR="$HOME/.claude/skills/$SKILL_NAME"
@@ -11,7 +11,12 @@ OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
 OPENCODE_AGENTS_FILE="$OPENCODE_CONFIG_DIR/AGENTS.md"
 CC_SWITCH_DEFAULT_DIR="${CC_SWITCH_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/cc-switch}/skills/$SKILL_NAME"
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+if [[ -n "$SCRIPT_SOURCE" ]]; then
+  SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_SOURCE")" && pwd)"
+else
+  SCRIPT_DIR=""
+fi
 WORK_DIR="$(pwd)"
 TMP_DIR=""
 
@@ -50,7 +55,7 @@ Options:
   --cc-switch           Install the CC Switch export bundle.
   --mode cli|rest       Set skill runtime mode. Default: prompt, then cli.
   --repo-url URL        Git repository used when the skill template is not local.
-  --ref REF             Git ref used when downloading/cloning. Default: main.
+  --ref REF             Git ref used when downloading/cloning. Default: master.
   --source DIR          Use an existing pam-os-memory skill directory.
   --yes                 Accept safe defaults and overwrite by creating backups.
   --non-interactive     Same as --yes.
@@ -222,14 +227,19 @@ find_skill_source() {
   local roots=(
     "$SOURCE_DIR"
     "$WORK_DIR/skills/$SKILL_NAME"
-    "$SCRIPT_DIR/../skills/$SKILL_NAME"
     "$WORK_DIR/.agents/skills/$SKILL_NAME"
     "$WORK_DIR/.claude/skills/$SKILL_NAME"
-    "$SCRIPT_DIR/../.agents/skills/$SKILL_NAME"
-    "$SCRIPT_DIR/../.claude/skills/$SKILL_NAME"
-    "$SCRIPT_DIR/.agents/skills/$SKILL_NAME"
-    "$SCRIPT_DIR/.claude/skills/$SKILL_NAME"
   )
+
+  if [[ -n "$SCRIPT_DIR" ]]; then
+    roots+=(
+      "$SCRIPT_DIR/../skills/$SKILL_NAME"
+      "$SCRIPT_DIR/../.agents/skills/$SKILL_NAME"
+      "$SCRIPT_DIR/../.claude/skills/$SKILL_NAME"
+      "$SCRIPT_DIR/.agents/skills/$SKILL_NAME"
+      "$SCRIPT_DIR/.claude/skills/$SKILL_NAME"
+    )
+  fi
 
   for candidate in "${roots[@]}"; do
     if [[ -n "$candidate" && -f "$candidate/SKILL.md" ]]; then
