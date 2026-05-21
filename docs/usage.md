@@ -294,7 +294,7 @@ REST API = 给模型真实工具能力：prepare_context、capture_memory、sear
 Skill    = 给模型操作策略：什么时候读记忆、什么时候写记忆、什么不要保存
 ```
 
-也就是说，REST 负责“能调用”，Skill 负责“会判断”。只配 Skill，模型最多只能按说明运行 CLI，缺少结构化工具体验。最佳方式是 CLI + REST + Skill 一起用。
+也就是说，Skill 负责“会判断”，运行模式负责“怎么调用”。默认推荐 CLI + Skill：不需要启动长驻 REST 服务，模型按 skill 说明运行本地 `memory` 命令。只有当你明确选择 REST 模式时，才需要启动 REST server 并配置 REST URL。
 
 本仓库已经内置两个项目级 Skill：
 

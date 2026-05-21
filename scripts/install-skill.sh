@@ -54,10 +54,11 @@ Options:
   --opencode            Install OpenCode compatibility.
   --cc-switch           Install the CC Switch export bundle.
   --mode cli|rest       Set skill runtime mode. Default: prompt, then cli.
+  --no-init             Skip running "memory init" after CLI-mode install.
   --repo-url URL        Git repository used when the skill template is not local.
   --ref REF             Git ref used when downloading/cloning. Default: master.
   --source DIR          Use an existing pam-os-memory skill directory.
-  --yes                 Accept safe defaults and overwrite by creating backups.
+  --yes                 Accept safe defaults and replace existing installs.
   --non-interactive     Same as --yes.
   -h, --help            Show this help.
 
@@ -67,7 +68,8 @@ Environment:
   CODEX_HOME            Codex home. Default: ~/.codex
   CC_SWITCH_HOME        CC Switch home. Default: ~/.config/cc-switch
 
-The installer defaults to user-global directories and confirms important writes.
+Without a target option, the installer prompts for targets. With --yes and no
+target option, it installs Codex only.
 USAGE
 }
 
@@ -105,7 +107,8 @@ confirm() {
   local reply suffix
 
   if [[ "$ASSUME_YES" == "1" ]]; then
-    return 0
+    [[ "$default" == "y" ]]
+    return
   fi
 
   if [[ "$default" == "y" ]]; then
@@ -152,6 +155,66 @@ prompt_secret() {
   printf '%s' "$reply"
 }
 
+select_install_targets() {
+  local selection item
+
+  printf '\nInstall targets:\n'
+  printf '  1) codex      - Codex global skill (%s)\n' "$CODEX_DEFAULT_DIR"
+  printf '  2) claude     - Claude Code global skill (%s)\n' "$CLAUDE_DEFAULT_DIR"
+  printf '  3) opencode   - OpenCode compatibility\n'
+  printf '  4) cc-switch  - CC Switch export bundle (%s)\n' "$CC_SWITCH_DEFAULT_DIR"
+  printf '  5) all\n'
+  printf '\nSelect one or more targets, separated by commas or spaces.\n'
+
+  while true; do
+    read_user selection 'Selection [1]: '
+    selection="${selection:-1}"
+    selection="${selection//,/ }"
+
+    INSTALL_CODEX=0
+    INSTALL_CLAUDE=0
+    INSTALL_OPENCODE=0
+    INSTALL_CC_SWITCH=0
+
+    for item in $selection; do
+      case "$item" in
+        1|codex|Codex|CODEX)
+          INSTALL_CODEX=1
+          ;;
+        2|claude|Claude|CLAUDE|claude-code|Claude-Code)
+          INSTALL_CLAUDE=1
+          ;;
+        3|opencode|OpenCode|OPENCODE)
+          INSTALL_OPENCODE=1
+          ;;
+        4|cc-switch|cc_switch|CC-Switch|CC_SWITCH)
+          INSTALL_CC_SWITCH=1
+          ;;
+        5|all|All|ALL)
+          INSTALL_CODEX=1
+          INSTALL_CLAUDE=1
+          INSTALL_OPENCODE=1
+          INSTALL_CC_SWITCH=1
+          ;;
+        *)
+          warn "Unknown target: $item"
+          INSTALL_CODEX=0
+          INSTALL_CLAUDE=0
+          INSTALL_OPENCODE=0
+          INSTALL_CC_SWITCH=0
+          break
+          ;;
+      esac
+    done
+
+    if [[ "$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE$INSTALL_CC_SWITCH" != "0000" ]]; then
+      return 0
+    fi
+
+    printf 'Please select at least one valid target.\n'
+  done
+}
+
 timestamp() {
   date '+%Y%m%d-%H%M%S'
 }
@@ -176,6 +239,31 @@ copy_dir() {
   cp -R "$src" "$dest"
 }
 
+run_cli_init() {
+  if [[ "$INSTALL_MODE" != "cli" || "$RUN_INIT" != "1" ]]; then
+    return 0
+  fi
+
+  if ! confirm "Initialize PAM-OS memory database with \"$CLI_COMMAND init\"?" "y"; then
+    warn "Skipped PAM-OS memory database init."
+    return 0
+  fi
+
+  if ! command -v uv >/dev/null 2>&1; then
+    warn "Could not run init because uv is not installed or not on PATH."
+    warn "Run manually later: uv run --python $CLI_PYTHON $CLI_COMMAND init"
+    return 0
+  fi
+
+  info "Initializing PAM-OS memory database"
+  if uv run --python "$CLI_PYTHON" "$CLI_COMMAND" init; then
+    return 0
+  fi
+
+  warn "PAM-OS memory database init failed."
+  warn "Run manually later: uv run --python $CLI_PYTHON $CLI_COMMAND init"
+}
+
 prepare_dest() {
   local dest="$1"
 
@@ -186,7 +274,7 @@ prepare_dest() {
   if [[ "$ASSUME_YES" != "1" ]]; then
     printf '\nExisting installation found:\n  %s\n' "$dest"
     printf 'Choose what to do:\n'
-    printf '  1) backup and replace\n'
+    printf '  1) replace existing install\n'
     printf '  2) skip this target\n'
     printf '  3) abort\n'
     local choice
@@ -200,9 +288,8 @@ prepare_dest() {
     esac
   fi
 
-  local backup="${dest}.bak.$(timestamp)"
-  info "Backing up $dest -> $backup"
-  mv "$dest" "$backup"
+  info "Replacing existing install: $dest"
+  rm -rf "$dest"
   return 0
 }
 
@@ -365,6 +452,16 @@ install_opencode() {
 }
 
 print_summary() {
+  local cli_summary rest_summary
+
+  if [[ "$INSTALL_MODE" == "cli" ]]; then
+    cli_summary="  CLI command: uv run --python $CLI_PYTHON $CLI_COMMAND prepare \"<task>\" --json"
+    rest_summary=""
+  else
+    cli_summary=""
+    rest_summary="  REST URL:    $REST_URL"
+  fi
+
   cat <<SUMMARY
 
 Done.
@@ -377,8 +474,8 @@ Next checks:
 
 PAM-OS runtime:
   mode:        $INSTALL_MODE
-  CLI command: uv run --python $CLI_PYTHON $CLI_COMMAND prepare "<task>" --json
-  REST URL:    $REST_URL
+$cli_summary
+$rest_summary
 
 SUMMARY
 }
@@ -392,6 +489,7 @@ MODE_ARG=""
 REPO_URL="$DEFAULT_REPO_URL"
 REPO_REF="$DEFAULT_REPO_REF"
 SOURCE_DIR=""
+RUN_INIT=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -421,6 +519,10 @@ while [[ $# -gt 0 ]]; do
     --mode)
       MODE_ARG="${2:-}"
       shift 2
+      ;;
+    --no-init)
+      RUN_INIT=0
+      shift
       ;;
     --repo-url)
       REPO_URL="${2:-}"
@@ -461,12 +563,8 @@ info "PAM-OS global skill installer"
 if [[ "$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE$INSTALL_CC_SWITCH" == "0000" ]]; then
   if [[ "$ASSUME_YES" == "1" ]]; then
     INSTALL_CODEX=1
-    INSTALL_CLAUDE=1
   else
-    confirm "Install Codex global skill to $CODEX_DEFAULT_DIR?" "y" && INSTALL_CODEX=1
-    confirm "Install Claude Code global skill to $CLAUDE_DEFAULT_DIR?" "y" && INSTALL_CLAUDE=1
-    confirm "Install OpenCode compatibility?" "y" && INSTALL_OPENCODE=1
-    confirm "Install CC Switch export bundle to $CC_SWITCH_DEFAULT_DIR?" "n" && INSTALL_CC_SWITCH=1
+    select_install_targets
   fi
 fi
 
@@ -493,13 +591,17 @@ else
   INSTALL_MODE="$MODE_ARG"
 fi
 
-CLI_PYTHON="$(prompt_value "Python version for uv run --python" "3.12")"
-CLI_COMMAND="$(prompt_value "PAM-OS CLI command" "memory")"
-REST_URL="$(prompt_value "PAM-OS REST URL" "http://127.0.0.1:8765")"
+CLI_PYTHON="3.12"
+CLI_COMMAND="memory"
+REST_URL="http://127.0.0.1:8765"
 REST_USERNAME=""
 REST_PASSWORD=""
 
-if [[ "$INSTALL_MODE" == "rest" ]]; then
+if [[ "$INSTALL_MODE" == "cli" ]]; then
+  CLI_PYTHON="$(prompt_value "Python version for uv run --python" "$CLI_PYTHON")"
+  CLI_COMMAND="$(prompt_value "PAM-OS CLI command" "$CLI_COMMAND")"
+else
+  REST_URL="$(prompt_value "PAM-OS REST URL" "$REST_URL")"
   if confirm "Configure REST Basic Auth credentials in skill config?" "n"; then
     REST_USERNAME="$(prompt_value "REST username" "")"
     REST_PASSWORD="$(prompt_secret "REST password")"
@@ -531,5 +633,7 @@ fi
 if [[ "$INSTALL_CC_SWITCH" == "1" ]]; then
   install_skill_dir "$SKILL_SOURCE" "$CC_SWITCH_DEFAULT_DIR" "CC Switch export bundle"
 fi
+
+run_cli_init
 
 print_summary
