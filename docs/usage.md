@@ -613,7 +613,25 @@ uv run --python 3.12 memory stats
 
 返回内容包括数据库路径、文件大小、FTS 状态、最近写入时间，以及各表的分表统计。
 
-### 7.14 `clear`
+### 7.14 `inspect`
+
+查看各表记忆明细和统计：
+
+```powershell
+uv run --python 3.12 memory inspect
+uv run --python 3.12 memory inspect --table memories --limit 10
+uv run --python 3.12 memory inspect --table memories --query self-host
+```
+
+输出 JSON：
+
+```powershell
+uv run --python 3.12 memory inspect --json
+```
+
+`--table` 支持 `all`、`events`、`memories`、`profile_evidence`、`profile_traits`、`behavior_events`、`context_packages` 和 `memory_links`。REST 中的对应接口是 `GET /memory/inspect`。
+
+### 7.15 `clear`
 
 清空所有记忆相关数据，包括原始事件、结构化记忆、画像、行为事件和上下文包：
 
@@ -677,6 +695,7 @@ curl http://127.0.0.1:8765/health
 | `GET` | `/health` | 健康检查、数据库路径、FTS 状态。 |
 | `POST` | `/events` | 低层写入事件并抽取记忆。 |
 | `GET` | `/memories/search?q=...` | 搜索记忆。 |
+| `GET` | `/memory/inspect?table=all&limit=20&q=...` | 查看各表记忆明细和统计。 |
 | `GET` | `/memory/should-use?task=...` | 判断是否需要读记忆。 |
 | `POST` | `/context/prepare` | 推荐的回答前上下文准备。 |
 | `POST` | `/memory/capture` | 推荐的回答后记忆捕获。 |
@@ -725,6 +744,15 @@ curl -X POST http://127.0.0.1:8765/behavior/choice `
 ```powershell
 curl "http://127.0.0.1:8765/profile?limit=10&q=self-host"
 ```
+
+查看记忆明细：
+
+```powershell
+curl "http://127.0.0.1:8765/memory/inspect?table=all&limit=20"
+curl "http://127.0.0.1:8765/memory/inspect?table=memories&limit=10&q=self-host"
+```
+
+`table` 支持 `all`、`events`、`memories`、`profile_evidence`、`profile_traits`、`behavior_events`、`context_packages` 和 `memory_links`。
 
 清空所有记忆数据：
 
@@ -778,6 +806,7 @@ if prepared.package:
 | `compile_context(task, ...)` | 低层上下文编译。 |
 | `reflect(recent=50)` | 从近期记忆编译反思上下文。 |
 | `clear_memory()` | 清空所有记忆相关数据并返回删除统计。 |
+| `inspect_memory(table="all", limit=20, query=None)` | 查看各表记忆明细和统计。 |
 
 使用配置对象：
 

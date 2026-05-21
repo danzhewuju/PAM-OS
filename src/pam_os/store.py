@@ -18,6 +18,49 @@ from pam_os.models import (
 )
 
 
+INSPECT_TABLES = {
+    "events": {
+        "order_by": "created_at DESC",
+        "json_columns": {"metadata_json": "metadata"},
+        "text_columns": ["id", "source", "source_ref", "content"],
+    },
+    "memories": {
+        "order_by": "created_at DESC",
+        "json_columns": {"tags_json": "tags"},
+        "text_columns": ["id", "event_id", "type", "content", "tags_json"],
+    },
+    "profile_evidence": {
+        "order_by": "created_at DESC",
+        "json_columns": {},
+        "text_columns": ["id", "trait_key", "evidence_type", "content", "source_event_id", "source_memory_id"],
+    },
+    "profile_traits": {
+        "order_by": "updated_at DESC",
+        "json_columns": {"evidence_ids_json": "evidence_ids"},
+        "text_columns": ["id", "trait_type", "trait_key", "statement", "scope", "status"],
+    },
+    "behavior_events": {
+        "order_by": "created_at DESC",
+        "json_columns": {
+            "chosen_json": "chosen",
+            "rejected_json": "rejected",
+            "deferred_json": "deferred",
+        },
+        "text_columns": ["id", "context", "chosen_json", "rejected_json", "deferred_json", "reason", "source_ref"],
+    },
+    "context_packages": {
+        "order_by": "created_at DESC",
+        "json_columns": {"memory_ids_json": "memory_ids"},
+        "text_columns": ["id", "task", "content", "memory_ids_json"],
+    },
+    "memory_links": {
+        "order_by": "created_at DESC",
+        "json_columns": {},
+        "text_columns": ["id", "source_memory_id", "target_memory_id", "relation"],
+    },
+}
+
+
 class MemoryStore:
     def __init__(self, db_path: Path | str, *, retrieval_config: RetrievalConfig | None = None):
         self.db_path = Path(db_path)
@@ -303,6 +346,34 @@ class MemoryStore:
             latest_write_at=latest_write_at,
             tables=tables,
         )
+
+    def inspect_memory(self, *, table: str = "all", limit: int = 20, query: str | None = None) -> dict[str, Any]:
+        if table != "all" and table not in INSPECT_TABLES:
+            allowed = ", ".join(["all", *INSPECT_TABLES])
+            raise ValueError(f"table must be one of: {allowed}")
+
+        db_size_bytes = 0
+        try:
+            db_size_bytes = self.db_path.stat().st_size
+        except FileNotFoundError:
+            pass
+
+        with self.connect() as conn:
+            existing_tables = self._list_tables(conn)
+            table_names = list(INSPECT_TABLES) if table == "all" else [table]
+            table_names = [name for name in table_names if name in existing_tables]
+            stats = {
+                "db_path": str(self.db_path),
+                "db_size_bytes": db_size_bytes,
+                "fts_available": "memories_fts" in existing_tables,
+                "latest_write_at": self._latest_write_at_for_tables(conn, existing_tables),
+                "tables": self._inspect_table_counts(conn, existing_tables),
+            }
+            details = {
+                name: self._fetch_inspect_rows(conn, table=name, limit=limit, query=query)
+                for name in table_names
+            }
+        return {"stats": stats, "details": details}
 
     def mark_behavior_events_consolidated(self, ids: list[str], timestamp: str) -> None:
         if not ids:
@@ -610,6 +681,86 @@ class MemoryStore:
             created_at=row["created_at"],
         )
 
+    def _list_tables(self, conn: sqlite3.Connection) -> set[str]:
+        rows = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type IN ('table', 'virtual table')
+            """
+        ).fetchall()
+        return {row["name"] for row in rows}
+
+    def _inspect_table_counts(self, conn: sqlite3.Connection, existing_tables: set[str]) -> dict[str, Any]:
+        counts: dict[str, Any] = {}
+        for table in INSPECT_TABLES:
+            if table not in existing_tables:
+                counts[table] = {"exists": False, "count": 0}
+                continue
+            counts[table] = {"exists": True, "count": self._count_rows(conn, table)}
+
+        if "memories" in existing_tables:
+            counts["memories"]["by_type"] = self._grouped_counts(conn, "memories", "type")
+            counts["memories"]["unconsolidated_count"] = self._count_unconsolidated_memories(conn)
+
+        if "profile_traits" in existing_tables:
+            counts["profile_traits"]["by_status"] = self._grouped_counts(conn, "profile_traits", "status")
+
+        if "behavior_events" in existing_tables:
+            counts["behavior_events"]["unconsolidated_count"] = self._count_unconsolidated_behavior_events(conn)
+
+        return counts
+
+    def _fetch_inspect_rows(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        table: str,
+        limit: int,
+        query: str | None,
+    ) -> list[dict[str, Any]]:
+        config = INSPECT_TABLES[table]
+        columns = self._table_columns(conn, table)
+        where = ""
+        params: list[Any] = []
+        if query:
+            text_columns = [column for column in config["text_columns"] if column in columns]
+            if text_columns:
+                where = "WHERE " + " OR ".join(f"{column} LIKE ?" for column in text_columns)
+                params.extend([f"%{query}%"] * len(text_columns))
+        params.append(max(limit, 0))
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM {table}
+            {where}
+            ORDER BY {config["order_by"]}
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [self._normalize_inspect_row(row, config["json_columns"]) for row in rows]
+
+    def _table_columns(self, conn: sqlite3.Connection, table: str) -> set[str]:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return {row["name"] for row in rows}
+
+    def _normalize_inspect_row(self, row: sqlite3.Row, json_columns: dict[str, str]) -> dict[str, Any]:
+        item = dict(row)
+        for source, target in json_columns.items():
+            if source not in item:
+                continue
+            item[target] = self._parse_json_value(item.pop(source))
+        return item
+
+    def _parse_json_value(self, value: Any) -> Any:
+        if value in (None, ""):
+            return None
+        try:
+            return json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return value
+
     def _count_rows(self, conn: sqlite3.Connection, table: str) -> int:
         row = conn.execute(f"SELECT count(*) AS count FROM {table}").fetchone()
         return int(row["count"] if row else 0)
@@ -675,6 +826,26 @@ class MemoryStore:
             )
             """
         ).fetchone()
+        return row["latest_write_at"] if row and row["latest_write_at"] else None
+
+    def _latest_write_at_for_tables(self, conn: sqlite3.Connection, existing_tables: set[str]) -> str | None:
+        candidates = [
+            ("events", "created_at"),
+            ("memories", "updated_at"),
+            ("memory_links", "created_at"),
+            ("context_packages", "created_at"),
+            ("profile_evidence", "created_at"),
+            ("profile_traits", "updated_at"),
+            ("behavior_events", "created_at"),
+        ]
+        selects = [
+            f"SELECT {column} AS ts FROM {table}"
+            for table, column in candidates
+            if table in existing_tables
+        ]
+        if not selects:
+            return None
+        row = conn.execute(f"SELECT MAX(ts) AS latest_write_at FROM ({' UNION ALL '.join(selects)})").fetchone()
         return row["latest_write_at"] if row and row["latest_write_at"] else None
 
 

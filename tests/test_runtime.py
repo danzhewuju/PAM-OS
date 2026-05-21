@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from pam_os.api import create_app
 from pam_os.cli import main
 from pam_os.config import load_config
@@ -188,6 +190,84 @@ def test_storage_stats_exposed_by_rest_api(tmp_path):
     assert payload["db_path"].endswith("memory.sqlite3")
     assert "tables" in payload
     assert "memories" in payload["tables"]
+
+
+def test_inspect_memory_returns_stats_and_details(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+    runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
+
+    report = runtime.inspect_memory(table="all", limit=10)
+
+    assert "stats" in report
+    assert "details" in report
+    assert report["stats"]["tables"]["events"]["count"] == 1
+    assert report["stats"]["tables"]["memories"]["count"] >= 1
+    assert isinstance(report["details"]["events"][0]["metadata"], dict)
+    assert report["details"]["memories"][0]["tags"]
+
+
+def test_inspect_memory_filters_table_rows_by_query(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+    runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
+    runtime.capture_memory("我喜欢安静、直接的工程化回答。", force=True)
+
+    report = runtime.inspect_memory(table="memories", limit=10, query="self-host")
+
+    assert set(report["details"]) == {"memories"}
+    assert report["details"]["memories"]
+    assert all("self-host" in row["content"] or "self-host" in row["tags"] for row in report["details"]["memories"])
+
+
+def test_inspect_memory_rejects_unknown_table(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    try:
+        runtime.inspect_memory(table="secrets")
+    except ValueError as exc:
+        assert "table must be one of" in str(exc)
+    else:
+        raise AssertionError("expected unknown inspect table to be rejected")
+
+
+def test_inspect_cli_prints_text_report(tmp_path, capsys):
+    db_path = tmp_path / "memory.sqlite3"
+    runtime = PersonalMemoryRuntime(db_path=db_path)
+    runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
+
+    exit_code = main(["--db", str(db_path), "inspect", "--table", "memories", "--limit", "5"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "PAM-OS Memory Inspect" in captured.out
+    assert "memories" in captured.out
+    assert "self-host" in captured.out
+
+
+def test_inspect_cli_can_output_json_and_filter_rows(tmp_path, capsys):
+    db_path = tmp_path / "memory.sqlite3"
+    runtime = PersonalMemoryRuntime(db_path=db_path)
+    runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
+    runtime.capture_memory("我喜欢安静、直接的工程化回答。", force=True)
+
+    exit_code = main(
+        [
+            "--db",
+            str(db_path),
+            "inspect",
+            "--table",
+            "memories",
+            "--query",
+            "self-host",
+            "--json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert set(payload["details"]) == {"memories"}
+    assert payload["details"]["memories"]
+    assert all("self-host" in row["content"] or "self-host" in row["tags"] for row in payload["details"]["memories"])
 
 
 def test_clear_memory_removes_all_stored_memory_data(tmp_path):

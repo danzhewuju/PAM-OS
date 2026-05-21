@@ -12,7 +12,7 @@ PAM-OS provides local-first memory through SQLite plus CLI, REST, and MCP adapte
 Before any PAM-OS operation, read `config.toml` from this skill directory:
 
 ```text
-.agents/skills/pam-os-memory/config.toml
+config.toml
 ```
 
 If the config file is missing, unreadable, or does not set a valid mode, use CLI mode.

@@ -191,3 +191,6 @@ class PersonalMemoryRuntime:
             "deleted_counts": deleted_counts,
             "storage_stats": self.get_storage_stats(),
         }
+
+    def inspect_memory(self, *, table: str = "all", limit: int = 20, query: str | None = None) -> dict[str, Any]:
+        return self.store.inspect_memory(table=table, limit=limit, query=query)

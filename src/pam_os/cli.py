@@ -10,6 +10,18 @@ from pam_os.runtime import PersonalMemoryRuntime
 from pam_os.serialization import to_plain
 
 
+INSPECT_TABLE_CHOICES = [
+    "all",
+    "events",
+    "memories",
+    "profile_evidence",
+    "profile_traits",
+    "behavior_events",
+    "context_packages",
+    "memory_links",
+]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -88,6 +100,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "stats":
             stats = runtime.get_storage_stats()
             print_json(to_plain(stats))
+            return 0
+        if args.command == "inspect":
+            report = to_plain(runtime.inspect_memory(table=args.table, limit=args.limit, query=args.query))
+            if args.json:
+                print_json(report)
+            else:
+                print_inspect_report(report)
             return 0
         if args.command == "clear":
             if not args.confirm:
@@ -172,6 +191,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("stats", help="Show storage statistics")
 
+    inspect = subparsers.add_parser("inspect", help="Inspect memory tables and rows")
+    inspect.add_argument("--table", choices=INSPECT_TABLE_CHOICES, default="all")
+    inspect.add_argument("--limit", type=int, default=20)
+    inspect.add_argument("--query", help="Case-insensitive keyword filter for detail rows")
+    inspect.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+
     clear = subparsers.add_parser("clear", help="Clear all memory data")
     clear.add_argument("--confirm", action="store_true", help="Required confirmation for irreversible deletion")
 
@@ -190,6 +215,108 @@ def build_parser() -> argparse.ArgumentParser:
 
 def print_json(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def print_inspect_report(report: dict[str, Any]) -> None:
+    stats = report["stats"]
+    print("PAM-OS Memory Inspect")
+    print("=" * 60)
+    print(f"DB: {stats['db_path']}")
+    print(f"Size: {stats['db_size_bytes']} bytes")
+    print(f"FTS available: {stats['fts_available']}")
+    print(f"Latest write: {stats['latest_write_at'] or '-'}")
+    print()
+
+    print("Table Counts")
+    print("-" * 60)
+    for table, info in stats["tables"].items():
+        exists = "ok" if info["exists"] else "missing"
+        extras = []
+        if "by_type" in info:
+            extras.append(f"by_type={info['by_type']}")
+        if "by_status" in info:
+            extras.append(f"by_status={info['by_status']}")
+        if "unconsolidated_count" in info:
+            extras.append(f"unconsolidated={info['unconsolidated_count']}")
+        suffix = f" ({'; '.join(extras)})" if extras else ""
+        print(f"{table}: {info['count']} [{exists}]{suffix}")
+    print()
+
+    for table, rows in report["details"].items():
+        print(table)
+        print("-" * 60)
+        if not rows:
+            print("(no rows)")
+            print()
+            continue
+        for index, row in enumerate(rows, start=1):
+            print(f"[{index}] {format_inspect_title(table, row)}")
+            for key in ["content", "statement", "task", "context"]:
+                if key in row:
+                    print(f"  {key}: {row[key]}")
+            print(f"  id: {row.get('id')}")
+            print(f"  meta: {format_inspect_meta(table, row)}")
+        print()
+
+
+def format_inspect_title(table: str, row: dict[str, Any]) -> str:
+    if table == "memories":
+        return f"{row.get('type')} importance={row.get('importance')} confidence={row.get('confidence')}"
+    if table == "profile_traits":
+        return f"{row.get('trait_key')} status={row.get('status')}"
+    if table == "profile_evidence":
+        return f"{row.get('trait_key')} evidence={row.get('evidence_type')}"
+    if table == "behavior_events":
+        return f"{row.get('created_at')} consolidated={row.get('consolidated_at') or 'no'}"
+    if table == "events":
+        return f"{row.get('source')} {row.get('created_at')}"
+    if table == "context_packages":
+        return f"{row.get('created_at')} memories={len(row.get('memory_ids') or [])}"
+    if table == "memory_links":
+        return f"{row.get('relation')} weight={row.get('weight')}"
+    return str(row.get("id"))
+
+
+def format_inspect_meta(table: str, row: dict[str, Any]) -> str:
+    if table == "memories":
+        meta = {
+            "event_id": row.get("event_id"),
+            "tags": row.get("tags"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+    elif table == "profile_traits":
+        meta = {
+            "type": row.get("trait_type"),
+            "scope": row.get("scope"),
+            "stability": row.get("stability"),
+            "confidence": row.get("confidence"),
+            "evidence_count": row.get("evidence_count"),
+            "evidence_ids": row.get("evidence_ids"),
+            "updated_at": row.get("updated_at"),
+        }
+    elif table == "profile_evidence":
+        meta = {
+            "confidence": row.get("confidence"),
+            "source_event_id": row.get("source_event_id"),
+            "source_memory_id": row.get("source_memory_id"),
+            "behavior_event_id": row.get("behavior_event_id"),
+            "created_at": row.get("created_at"),
+        }
+    elif table == "behavior_events":
+        meta = {
+            "chosen": row.get("chosen"),
+            "rejected": row.get("rejected"),
+            "deferred": row.get("deferred"),
+            "reason": row.get("reason"),
+        }
+    elif table == "events":
+        meta = {"source_ref": row.get("source_ref"), "metadata": row.get("metadata")}
+    elif table == "context_packages":
+        meta = {"memory_ids": row.get("memory_ids")}
+    else:
+        meta = row
+    return json.dumps(meta, ensure_ascii=False)
 
 
 def _json_arg(value: str, *, default: Any) -> Any:

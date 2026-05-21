@@ -81,6 +81,13 @@ def create_app(db_path: Path | str | None = None, config=None):
     def get_storage_stats() -> dict[str, Any]:
         return to_plain(runtime.get_storage_stats())
 
+    @app.get("/memory/inspect")
+    def inspect_memory(table: str = "all", limit: int = 20, q: str | None = None) -> dict[str, Any]:
+        try:
+            return to_plain(runtime.inspect_memory(table=table, limit=limit, query=q))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
     @app.post("/memory/clear")
     def clear_memory(request: ClearMemoryRequest) -> dict[str, Any]:
         if not request.confirm:

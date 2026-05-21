@@ -71,3 +71,37 @@ def test_clear_memory_rest_api_clears_storage(tmp_path):
     assert payload["deleted_counts"]["memories"] >= 1
     assert payload["storage_stats"]["tables"]["events"]["count"] == 0
     assert payload["storage_stats"]["tables"]["memories"]["count"] == 0
+
+
+def test_inspect_memory_rest_api_returns_requested_table(tmp_path):
+    app = create_app(db_path=tmp_path / "memory.sqlite3")
+    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/capture")
+    inspect_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/inspect")
+    capture_request = type(
+        "CaptureRequest",
+        (),
+        {
+            "content": "我偏好 self-host、开源、可控系统。",
+            "source": "conversation",
+            "source_ref": None,
+            "metadata": {},
+            "force": True,
+        },
+    )()
+
+    capture_route.endpoint(capture_request)
+    payload = inspect_route.endpoint(table="memories", limit=10, q="self-host")
+
+    assert set(payload["details"]) == {"memories"}
+    assert payload["stats"]["tables"]["memories"]["count"] >= 1
+    assert payload["details"]["memories"]
+
+
+def test_inspect_memory_rest_api_rejects_unknown_table(tmp_path):
+    app = create_app(db_path=tmp_path / "memory.sqlite3")
+    inspect_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/inspect")
+
+    with pytest.raises(Exception) as exc:
+        inspect_route.endpoint(table="secrets", limit=20, q=None)
+
+    assert "400" in str(exc.value)
