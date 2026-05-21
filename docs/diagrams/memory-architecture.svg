@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1220 760" role="img" aria-label="PAM-OS memory architecture">
+  <style>
+    .box {
+      fill: #f6f8fb;
+      stroke: #7d91ad;
+      stroke-width: 1.4;
+      rx: 7;
+    }
+    .entry { fill: #ffffff; stroke: #8aa0bd; }
+    .write-box { fill: #eef7f1; stroke: #65a37f; }
+    .upgrade-box { fill: #fff4df; stroke: #d4933a; }
+    .read-box { fill: #eaf2fb; stroke: #6b93bf; }
+    .store-box { fill: #f6f8fb; stroke: #a8b4c3; }
+    .answer-box { fill: #f8f0f6; stroke: #b97ca9; }
+    .group {
+      fill: rgba(255, 255, 255, 0.72);
+      stroke: #d7e0ea;
+      stroke-width: 1.2;
+      rx: 10;
+    }
+    .label-text {
+      fill: #172033;
+      font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .small-text {
+      fill: #4f6072;
+      font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 11px;
+    }
+    .group-title {
+      fill: #2e6da4;
+      font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 13px;
+      font-weight: 760;
+    }
+    .arrow {
+      fill: none;
+      stroke: #566b84;
+      stroke-width: 1.6;
+      marker-end: url(#arrowhead);
+    }
+    .dashed { stroke-dasharray: 6 5; }
+    .upgrade-arrow { stroke: #b65c2a; stroke-width: 2; }
+    .read-arrow { stroke: #2e6da4; }
+    .write-arrow { stroke: #1e7f68; }
+  </style>
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#566b84" />
+    </marker>
+  </defs>
+
+  <rect class="group" x="24" y="28" width="180" height="258" />
+  <text class="group-title" x="42" y="56">入口</text>
+  <rect class="box entry" x="44" y="78" width="140" height="44" />
+  <text class="label-text" x="72" y="104">User / Codex</text>
+  <rect class="box entry" x="44" y="146" width="140" height="48" />
+  <text class="label-text" x="70" y="166">Codex Skill</text>
+  <text class="small-text" x="64" y="183">pam-os-memory</text>
+  <rect class="box entry" x="44" y="218" width="62" height="42" />
+  <text class="label-text" x="63" y="244">CLI</text>
+  <rect class="box entry" x="122" y="218" width="62" height="42" />
+  <text class="label-text" x="139" y="244">REST</text>
+
+  <rect class="group" x="246" y="28" width="198" height="348" />
+  <text class="group-title" x="266" y="56">PersonalMemoryRuntime</text>
+  <rect class="box" x="274" y="80" width="140" height="48" />
+  <text class="label-text" x="290" y="109">Orchestrator</text>
+  <rect class="box" x="274" y="152" width="140" height="48" />
+  <text class="label-text" x="304" y="181">Extractor</text>
+  <rect class="box" x="274" y="224" width="140" height="48" />
+  <text class="label-text" x="296" y="253">Consolidator</text>
+  <rect class="box" x="274" y="296" width="140" height="48" />
+  <text class="label-text" x="309" y="325">Compiler</text>
+
+  <rect class="group" x="488" y="28" width="210" height="258" />
+  <text class="group-title" x="508" y="56">写入路径</text>
+  <rect class="box write-box" x="518" y="80" width="150" height="48" />
+  <text class="label-text" x="575" y="100">events</text>
+  <text class="small-text" x="540" y="117">raw immutable input</text>
+  <rect class="box write-box" x="518" y="152" width="150" height="48" />
+  <text class="label-text" x="566" y="172">memories</text>
+  <text class="small-text" x="546" y="189">searchable facts</text>
+  <rect class="box write-box" x="518" y="224" width="150" height="48" />
+  <text class="label-text" x="548" y="244">behavior_events</text>
+  <text class="small-text" x="536" y="261">chosen / rejected</text>
+
+  <rect class="group" x="744" y="28" width="230" height="348" />
+  <text class="group-title" x="764" y="56">升级路径：consolidate</text>
+  <rect class="box upgrade-box" x="784" y="80" width="150" height="48" />
+  <text class="label-text" x="800" y="100">scan recent rows</text>
+  <text class="small-text" x="805" y="117">unconsolidated only</text>
+  <path class="box upgrade-box" d="M859 151 L934 176 L859 201 L784 176 Z" />
+  <text class="label-text" x="813" y="181">trait candidate?</text>
+  <rect class="box upgrade-box" x="784" y="224" width="150" height="48" />
+  <text class="label-text" x="806" y="244">profile_evidence</text>
+  <text class="small-text" x="807" y="261">why we believe it</text>
+  <rect class="box upgrade-box" x="784" y="296" width="150" height="48" />
+  <text class="label-text" x="805" y="316">profile_traits</text>
+  <text class="small-text" x="797" y="333">confidence + stability</text>
+
+  <rect class="group" x="744" y="414" width="230" height="278" />
+  <text class="group-title" x="764" y="442">读取路径：prepare</text>
+  <path class="box read-box" d="M859 467 L934 492 L859 517 L784 492 Z" />
+  <text class="label-text" x="809" y="497">should use memory?</text>
+  <rect class="box read-box" x="784" y="540" width="150" height="48" />
+  <text class="label-text" x="812" y="560">search_memory</text>
+  <text class="small-text" x="816" y="577">FTS + filters</text>
+  <rect class="box read-box" x="784" y="616" width="150" height="48" />
+  <text class="label-text" x="811" y="636">rerank + budget</text>
+  <text class="small-text" x="807" y="653">profile traits first</text>
+
+  <rect class="group" x="1016" y="28" width="180" height="236" />
+  <text class="group-title" x="1036" y="56">SQLite MemoryStore</text>
+  <rect class="box store-box" x="1040" y="86" width="132" height="58" />
+  <text class="label-text" x="1056" y="110">memory.sqlite3</text>
+  <text class="small-text" x="1052" y="127">events / memories</text>
+  <rect class="box store-box" x="1040" y="174" width="132" height="46" />
+  <text class="label-text" x="1076" y="201">FTS5</text>
+
+  <rect class="box read-box" x="1024" y="616" width="150" height="48" />
+  <text class="label-text" x="1042" y="636">context_packages</text>
+  <text class="small-text" x="1048" y="653">prompt-ready context</text>
+  <rect class="box answer-box" x="1024" y="690" width="150" height="48" />
+  <text class="label-text" x="1053" y="710">Codex answer</text>
+  <text class="small-text" x="1048" y="727">with memory context</text>
+
+  <path class="arrow" d="M114 122 V146" />
+  <path class="arrow" d="M106 170 C150 170 146 238 106 238" />
+  <path class="arrow dashed" d="M122 170 C198 170 198 238 122 238" />
+  <path class="arrow" d="M184 238 C226 238 230 104 274 104" />
+  <path class="arrow dashed" d="M184 238 C226 238 230 104 274 104" />
+  <path class="arrow write-arrow" d="M414 104 C456 104 470 176 518 176" />
+  <path class="arrow write-arrow" d="M414 104 C468 104 462 248 518 248" />
+  <path class="arrow write-arrow" d="M414 176 H518" />
+  <path class="arrow write-arrow" d="M593 128 V152" />
+
+  <path class="arrow upgrade-arrow" d="M414 248 H784" />
+  <path class="arrow upgrade-arrow" d="M668 176 C714 176 724 104 784 104" />
+  <path class="arrow upgrade-arrow" d="M668 248 C714 248 724 104 784 104" />
+  <path class="arrow upgrade-arrow" d="M859 128 V151" />
+  <path class="arrow upgrade-arrow" d="M859 201 V224" />
+  <path class="arrow upgrade-arrow" d="M859 272 V296" />
+  <path class="arrow upgrade-arrow" d="M934 320 C970 320 970 248 934 248" />
+
+  <path class="arrow read-arrow" d="M414 104 C614 104 624 492 784 492" />
+  <path class="arrow read-arrow" d="M859 517 V540" />
+  <path class="arrow read-arrow" d="M668 176 C708 176 722 564 784 564" />
+  <path class="arrow read-arrow" d="M934 320 C996 320 996 640 934 640" />
+  <path class="arrow read-arrow" d="M859 588 V616" />
+  <path class="arrow read-arrow" d="M934 640 H1024" />
+  <path class="arrow read-arrow" d="M1099 664 V690" />
+
+  <path class="arrow dashed" d="M668 104 H1040" />
+  <path class="arrow dashed" d="M934 248 C1004 248 1004 115 1040 115" />
+  <path class="arrow dashed" d="M668 176 C1000 176 1000 197 1040 197" />
+  <path class="arrow dashed" d="M1099 616 V220" />
+</svg>

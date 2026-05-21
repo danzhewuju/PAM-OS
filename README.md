@@ -10,7 +10,9 @@ The MVP is local-first and deliberately small. The runtime stores raw events for
 
 ## Architecture Diagram
 
-Open the interactive architecture diagram: [docs/diagrams/memory-architecture.html](docs/diagrams/memory-architecture.html).
+[![PAM-OS memory architecture](docs/diagrams/memory-architecture.svg)](docs/diagrams/memory-architecture.html)
+
+Open the interactive version: [docs/diagrams/memory-architecture.html](docs/diagrams/memory-architecture.html).
 
 ## Quick Start
 
