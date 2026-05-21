@@ -9,7 +9,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class StorageConfig:
-    db_path: str = ".pam-os/memory.sqlite3"
+    db_path: str = "~/.pam-os/memory.sqlite3"
 
 
 @dataclass(frozen=True)

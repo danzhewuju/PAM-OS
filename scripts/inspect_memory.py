@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_DB = Path(".pam-os") / "memory.sqlite3"
+DEFAULT_DB = Path.home() / ".pam-os" / "memory.sqlite3"
 TABLES = {
     "events": {
         "order_by": "created_at DESC",

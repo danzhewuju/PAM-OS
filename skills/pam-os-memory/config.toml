@@ -6,6 +6,8 @@ mode = "cli"
 [cli]
 python = "3.12"
 command = "memory"
+repo_dir = ""
+db_path = "~/.pam-os/memory.sqlite3"
 
 [rest]
 url = "http://127.0.0.1:8765"

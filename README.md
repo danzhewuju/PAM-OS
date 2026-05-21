@@ -21,7 +21,7 @@ uv run --python 3.12 memory compile "我现在想继续做 Personal AI Memory OS
 uv run --python 3.12 memory stats
 ```
 
-By default, data is stored in `.pam-os/memory.sqlite3`. Override it with:
+By default, data is stored in `~/.pam-os/memory.sqlite3` so multiple terminals and projects share the same local memory database. Override it with:
 
 ```powershell
 $env:PAM_OS_DB = "C:\path\to\memory.sqlite3"

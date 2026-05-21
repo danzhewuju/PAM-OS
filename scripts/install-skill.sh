@@ -4,6 +4,8 @@ set -Eeuo pipefail
 SKILL_NAME="${PAM_OS_SKILL_NAME:-pam-os-memory}"
 DEFAULT_REPO_URL="${PAM_OS_REPO_URL:-https://github.com/danzhewuju/PAM-OS.git}"
 DEFAULT_REPO_REF="${PAM_OS_REPO_REF:-master}"
+DEFAULT_REPO_DIR="${PAM_OS_REPO_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/pam-os/repo}"
+DEFAULT_DB_PATH="${PAM_OS_DB:-${PAM_OS_DB_PATH:-$HOME/.pam-os/memory.sqlite3}}"
 
 CODEX_DEFAULT_DIR="${CODEX_HOME:-$HOME/.codex}/skills/$SKILL_NAME"
 CLAUDE_DEFAULT_DIR="$HOME/.claude/skills/$SKILL_NAME"
@@ -57,6 +59,8 @@ Options:
   --no-init             Skip running "memory init" after CLI-mode install.
   --python VERSION      Python version for uv run --python. Default: 3.12.
   --cli-command COMMAND PAM-OS CLI command. Default: memory.
+  --repo-dir DIR        PAM-OS repo used for CLI mode. Default: ~/.local/share/pam-os/repo.
+  --db PATH             PAM-OS SQLite database path. Default: ~/.pam-os/memory.sqlite3.
   --repo-url URL        Git repository used when the skill template is not local.
   --ref REF             Git ref used when downloading/cloning. Default: master.
   --source DIR          Use an existing pam-os-memory skill directory.
@@ -67,6 +71,8 @@ Options:
 Environment:
   PAM_OS_REPO_URL       Default repo URL. Current default: $DEFAULT_REPO_URL
   PAM_OS_REPO_REF       Default repo ref. Current default: $DEFAULT_REPO_REF
+  PAM_OS_REPO_DIR       Default CLI repo dir. Current default: $DEFAULT_REPO_DIR
+  PAM_OS_DB             Default database path. Current default: $DEFAULT_DB_PATH
   PAM_OS_CLI_PYTHON     Default CLI Python version. Default: 3.12
   PAM_OS_CLI_COMMAND    Default CLI command. Default: memory
   CODEX_HOME            Codex home. Default: ~/.codex
@@ -236,6 +242,43 @@ toml_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
+ensure_cli_repo() {
+  if [[ "$INSTALL_MODE" != "cli" ]]; then
+    return 0
+  fi
+
+  if [[ -n "$CLI_REPO_DIR" && -f "$CLI_REPO_DIR/pyproject.toml" ]]; then
+    return 0
+  fi
+
+  if [[ -n "$WORK_DIR" && -f "$WORK_DIR/pyproject.toml" && -d "$WORK_DIR/src/pam_os" ]]; then
+    CLI_REPO_DIR="$(abs_path "$WORK_DIR")"
+    return 0
+  fi
+
+  if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/../pyproject.toml" && -d "$SCRIPT_DIR/../src/pam_os" ]]; then
+    CLI_REPO_DIR="$(abs_path "$SCRIPT_DIR/..")"
+    return 0
+  fi
+
+  CLI_REPO_DIR="${CLI_REPO_DIR:-$DEFAULT_REPO_DIR}"
+
+  if [[ -f "$CLI_REPO_DIR/pyproject.toml" ]]; then
+    return 0
+  fi
+
+  if ! command -v git >/dev/null 2>&1; then
+    die "Could not find a PAM-OS repo for CLI mode and git is not installed."
+  fi
+
+  info "Fetching PAM-OS CLI repo into $CLI_REPO_DIR"
+  mkdir -p "$(dirname "$CLI_REPO_DIR")"
+  git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" "$CLI_REPO_DIR" >/dev/null 2>&1 || {
+    warn "Branch clone failed; trying default branch."
+    git clone --depth 1 "$REPO_URL" "$CLI_REPO_DIR" >/dev/null 2>&1 || die "Could not clone $REPO_URL"
+  }
+}
+
 copy_dir() {
   local src="$1"
   local dest="$2"
@@ -255,17 +298,17 @@ run_cli_init() {
 
   if ! command -v uv >/dev/null 2>&1; then
     warn "Could not run init because uv is not installed or not on PATH."
-    warn "Run manually later: uv run --python $CLI_PYTHON $CLI_COMMAND init"
+    warn "Run manually later: uv --directory $CLI_REPO_DIR run --python $CLI_PYTHON $CLI_COMMAND --db $DB_PATH init"
     return 0
   fi
 
   info "Initializing PAM-OS memory database"
-  if uv run --python "$CLI_PYTHON" "$CLI_COMMAND" init; then
+  if uv --directory "$CLI_REPO_DIR" run --python "$CLI_PYTHON" "$CLI_COMMAND" --db "$DB_PATH" init; then
     return 0
   fi
 
   warn "PAM-OS memory database init failed."
-  warn "Run manually later: uv run --python $CLI_PYTHON $CLI_COMMAND init"
+  warn "Run manually later: uv --directory $CLI_REPO_DIR run --python $CLI_PYTHON $CLI_COMMAND --db $DB_PATH init"
 }
 
 prepare_dest() {
@@ -372,13 +415,15 @@ download_repo_source() {
 
 write_skill_config() {
   local path="$1"
-  local escaped_url escaped_user escaped_pass escaped_python escaped_command
+  local escaped_url escaped_user escaped_pass escaped_python escaped_command escaped_repo_dir escaped_db_path
 
   escaped_url="$(toml_escape "$REST_URL")"
   escaped_user="$(toml_escape "$REST_USERNAME")"
   escaped_pass="$(toml_escape "$REST_PASSWORD")"
   escaped_python="$(toml_escape "$CLI_PYTHON")"
   escaped_command="$(toml_escape "$CLI_COMMAND")"
+  escaped_repo_dir="$(toml_escape "$CLI_REPO_DIR")"
+  escaped_db_path="$(toml_escape "$DB_PATH")"
 
   cat > "$path" <<CONFIG
 # PAM-OS skill runtime mode.
@@ -389,6 +434,8 @@ mode = "$INSTALL_MODE"
 [cli]
 python = "$escaped_python"
 command = "$escaped_command"
+repo_dir = "$escaped_repo_dir"
+db_path = "$escaped_db_path"
 
 [rest]
 url = "$escaped_url"
@@ -459,7 +506,7 @@ print_summary() {
   local cli_summary rest_summary
 
   if [[ "$INSTALL_MODE" == "cli" ]]; then
-    cli_summary="  CLI command: uv run --python $CLI_PYTHON $CLI_COMMAND prepare \"<task>\" --json"
+    cli_summary="  CLI command: uv --directory $CLI_REPO_DIR run --python $CLI_PYTHON $CLI_COMMAND --db $DB_PATH prepare \"<task>\" --json"
     rest_summary=""
   else
     cli_summary=""
@@ -492,8 +539,10 @@ INSTALL_CC_SWITCH=0
 MODE_ARG=""
 REPO_URL="$DEFAULT_REPO_URL"
 REPO_REF="$DEFAULT_REPO_REF"
+CLI_REPO_DIR="$DEFAULT_REPO_DIR"
 CLI_PYTHON="${PAM_OS_CLI_PYTHON:-3.12}"
 CLI_COMMAND="${PAM_OS_CLI_COMMAND:-memory}"
+DB_PATH="$DEFAULT_DB_PATH"
 SOURCE_DIR=""
 RUN_INIT=1
 
@@ -536,6 +585,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cli-command)
       CLI_COMMAND="${2:-}"
+      shift 2
+      ;;
+    --repo-dir)
+      CLI_REPO_DIR="${2:-}"
+      shift 2
+      ;;
+    --db)
+      DB_PATH="${2:-}"
       shift 2
       ;;
     --repo-url)
@@ -582,6 +639,10 @@ fi
 
 if [[ -z "$REPO_REF" ]]; then
   die "--ref must not be empty."
+fi
+
+if [[ -z "$DB_PATH" ]]; then
+  die "--db must not be empty."
 fi
 
 if [[ "$ASSUME_YES" == "0" && ! can_prompt ]]; then
@@ -632,6 +693,8 @@ if [[ "$INSTALL_MODE" == "rest" ]]; then
     REST_PASSWORD="$(prompt_secret "REST password")"
   fi
 fi
+
+ensure_cli_repo
 
 SKILL_SOURCE="$(find_skill_source || true)"
 if [[ -z "$SKILL_SOURCE" ]]; then

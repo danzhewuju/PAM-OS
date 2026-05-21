@@ -32,6 +32,8 @@ mode = "cli"
 [cli]
 python = "3.12"
 command = "memory"
+repo_dir = "/absolute/path/to/PAM-OS"
+db_path = "~/.pam-os/memory.sqlite3"
 
 [rest]
 url = "http://127.0.0.1:8765"
@@ -50,6 +52,8 @@ password = ""
 | `[rest].password` | REST Basic Auth 密码。空字符串表示不发送认证。 |
 | `[cli].python` | CLI 模式使用的 Python 版本。 |
 | `[cli].command` | CLI 入口命令，默认 `memory`。 |
+| `[cli].repo_dir` | PAM-OS 仓库绝对路径。CLI 模式会在这个目录下运行 `uv`。 |
+| `[cli].db_path` | SQLite 数据库路径，默认 `~/.pam-os/memory.sqlite3`，多终端共用。 |
 
 ## 3. CLI 模式
 
@@ -64,10 +68,10 @@ mode = "cli"
 大模型会使用类似命令：
 
 ```powershell
-uv run --python 3.12 memory prepare "按我的偏好，下一步怎么做？" --json
-uv run --python 3.12 memory capture "我偏好本地优先、轻量、可控的技术方案。"
-uv run --python 3.12 memory behavior-choice --context "技术路线" --chosen "SQLite FTS5" --rejected "Qdrant"
-uv run --python 3.12 memory consolidate --recent 100
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" prepare "按我的偏好，下一步怎么做？" --json
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" capture "我偏好本地优先、轻量、可控的技术方案。"
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" behavior-choice --context "技术路线" --chosen "SQLite FTS5" --rejected "Qdrant"
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" consolidate --recent 100
 ```
 
 CLI 模式适合日常开发和最小可用场景。
@@ -86,6 +90,8 @@ mode = "rest"
 [cli]
 python = "3.12"
 command = "memory"
+repo_dir = "/absolute/path/to/PAM-OS"
+db_path = "~/.pam-os/memory.sqlite3"
 
 [rest]
 url = "http://127.0.0.1:8765"
@@ -112,7 +118,7 @@ REST 模式需要你先启动 PAM-OS REST 服务：
 ```powershell
 cd C:\project\PAM-OS
 
-$env:PAM_OS_DB = "C:\project\PAM-OS\.pam-os\memory.sqlite3"
+$env:PAM_OS_DB = "$HOME\.pam-os\memory.sqlite3"
 $env:PAM_OS_CONFIG = "C:\project\PAM-OS\config\pam-os.toml"
 
 uv run --python 3.12 --extra api memory serve --host 127.0.0.1 --port 8765

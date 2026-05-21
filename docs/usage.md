@@ -35,7 +35,7 @@ uv run --python 3.12 memory init
 默认数据库会创建在：
 
 ```text
-.pam-os/memory.sqlite3
+~/.pam-os/memory.sqlite3
 ```
 
 写入一条记忆：
@@ -777,7 +777,7 @@ http://127.0.0.1:8765/docs
 ```python
 from pam_os import PersonalMemoryRuntime
 
-runtime = PersonalMemoryRuntime(db_path=".pam-os/memory.sqlite3")
+runtime = PersonalMemoryRuntime(db_path="~/.pam-os/memory.sqlite3")
 
 runtime.capture_memory(
     "我决定 PAM-OS v0.1 先用 SQLite FTS5，不引入 Qdrant。",
@@ -833,7 +833,7 @@ PAM-OS 使用 SQLite。初始化时会创建这些表：
 | `profile_traits` | 稳定用户画像。 |
 | `behavior_events` | 用户行为选择事件。 |
 
-默认数据库位于 `.pam-os/memory.sqlite3`，该目录已被 `.gitignore` 忽略。
+默认数据库位于 `~/.pam-os/memory.sqlite3`，因此不同终端和不同项目会共用同一份本机记忆库。
 
 ## 12. 检索和抽取规则
 

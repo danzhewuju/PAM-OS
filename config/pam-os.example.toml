@@ -2,9 +2,10 @@
 # Copy this file to config/pam-os.toml and edit local values there.
 
 [storage]
-# SQLite database path. Relative paths are resolved from the project working directory.
+# SQLite database path. The default is user-global so multiple terminals and
+# projects share the same local memory database.
 # Environment override: PAM_OS_DB
-db_path = ".pam-os/memory.sqlite3"
+db_path = "~/.pam-os/memory.sqlite3"
 
 [server]
 # REST API bind address and port used by `memory serve`.

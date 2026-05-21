@@ -36,6 +36,8 @@ mode = "cli"
 [cli]
 python = "3.12"
 command = "memory"
+repo_dir = "/absolute/path/to/PAM-OS"
+db_path = "~/.pam-os/memory.sqlite3"
 
 [rest]
 url = "http://127.0.0.1:8765"
@@ -79,10 +81,11 @@ Call `prepare_context` when the user asks about:
 
 Do not read memory for generic one-off factual questions unless the user explicitly requests memory.
 
-In CLI mode, run from the PAM-OS repo:
+In CLI mode, run commands with `uv --directory "<repo_dir>" run ...` and pass `--db "<db_path>"`.
+If `[cli].repo_dir` is empty, first locate the PAM-OS repository that contains `pyproject.toml` and `src/pam_os`, then use that absolute path.
 
 ```powershell
-uv run --python 3.12 memory prepare "<current task>" --json
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" prepare "<current task>" --json
 ```
 
 In REST mode, call:
@@ -120,7 +123,7 @@ Skip transient chat, secrets, credentials, medical/legal/financial sensitive det
 In CLI mode:
 
 ```powershell
-uv run --python 3.12 memory capture "<stable information>"
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" capture "<stable information>"
 ```
 
 In REST mode:
@@ -148,7 +151,7 @@ Use `--force` only when the user explicitly asks to remember something and the a
 When the user chooses among alternatives, record the choice:
 
 ```powershell
-uv run --python 3.12 memory behavior-choice `
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" behavior-choice `
   --context "<decision context>" `
   --chosen "<chosen option>" `
   --rejected "<rejected option>" `
@@ -158,7 +161,7 @@ uv run --python 3.12 memory behavior-choice `
 Run consolidation after meaningful batches of captures or choices:
 
 ```powershell
-uv run --python 3.12 memory consolidate --recent 100
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" consolidate --recent 100
 ```
 
 In REST mode, call `POST /behavior/choice` and `POST /memory/consolidate` with the equivalent JSON bodies.
