@@ -55,6 +55,8 @@ Options:
   --cc-switch           Install the CC Switch export bundle.
   --mode cli|rest       Set skill runtime mode. Default: prompt, then cli.
   --no-init             Skip running "memory init" after CLI-mode install.
+  --python VERSION      Python version for uv run --python. Default: 3.12.
+  --cli-command COMMAND PAM-OS CLI command. Default: memory.
   --repo-url URL        Git repository used when the skill template is not local.
   --ref REF             Git ref used when downloading/cloning. Default: master.
   --source DIR          Use an existing pam-os-memory skill directory.
@@ -65,6 +67,8 @@ Options:
 Environment:
   PAM_OS_REPO_URL       Default repo URL. Current default: $DEFAULT_REPO_URL
   PAM_OS_REPO_REF       Default repo ref. Current default: $DEFAULT_REPO_REF
+  PAM_OS_CLI_PYTHON     Default CLI Python version. Default: 3.12
+  PAM_OS_CLI_COMMAND    Default CLI command. Default: memory
   CODEX_HOME            Codex home. Default: ~/.codex
   CC_SWITCH_HOME        CC Switch home. Default: ~/.config/cc-switch
 
@@ -488,6 +492,8 @@ INSTALL_CC_SWITCH=0
 MODE_ARG=""
 REPO_URL="$DEFAULT_REPO_URL"
 REPO_REF="$DEFAULT_REPO_REF"
+CLI_PYTHON="${PAM_OS_CLI_PYTHON:-3.12}"
+CLI_COMMAND="${PAM_OS_CLI_COMMAND:-memory}"
 SOURCE_DIR=""
 RUN_INIT=1
 
@@ -524,6 +530,14 @@ while [[ $# -gt 0 ]]; do
       RUN_INIT=0
       shift
       ;;
+    --python)
+      CLI_PYTHON="${2:-}"
+      shift 2
+      ;;
+    --cli-command)
+      CLI_COMMAND="${2:-}"
+      shift 2
+      ;;
     --repo-url)
       REPO_URL="${2:-}"
       shift 2
@@ -552,6 +566,22 @@ done
 
 if [[ -n "$MODE_ARG" && "$MODE_ARG" != "cli" && "$MODE_ARG" != "rest" ]]; then
   die "--mode must be cli or rest."
+fi
+
+if [[ -z "$CLI_PYTHON" ]]; then
+  die "--python must not be empty."
+fi
+
+if [[ -z "$CLI_COMMAND" ]]; then
+  die "--cli-command must not be empty."
+fi
+
+if [[ -z "$REPO_URL" ]]; then
+  die "--repo-url must not be empty."
+fi
+
+if [[ -z "$REPO_REF" ]]; then
+  die "--ref must not be empty."
 fi
 
 if [[ "$ASSUME_YES" == "0" && ! can_prompt ]]; then
@@ -591,16 +621,11 @@ else
   INSTALL_MODE="$MODE_ARG"
 fi
 
-CLI_PYTHON="3.12"
-CLI_COMMAND="memory"
 REST_URL="http://127.0.0.1:8765"
 REST_USERNAME=""
 REST_PASSWORD=""
 
-if [[ "$INSTALL_MODE" == "cli" ]]; then
-  CLI_PYTHON="$(prompt_value "Python version for uv run --python" "$CLI_PYTHON")"
-  CLI_COMMAND="$(prompt_value "PAM-OS CLI command" "$CLI_COMMAND")"
-else
+if [[ "$INSTALL_MODE" == "rest" ]]; then
   REST_URL="$(prompt_value "PAM-OS REST URL" "$REST_URL")"
   if confirm "Configure REST Basic Auth credentials in skill config?" "n"; then
     REST_USERNAME="$(prompt_value "REST username" "")"
@@ -610,8 +635,6 @@ fi
 
 SKILL_SOURCE="$(find_skill_source || true)"
 if [[ -z "$SKILL_SOURCE" ]]; then
-  REPO_URL="$(prompt_value "PAM-OS Git repository URL" "$REPO_URL")"
-  REPO_REF="$(prompt_value "PAM-OS Git ref" "$REPO_REF")"
   SKILL_SOURCE="$(download_repo_source "$REPO_URL" "$REPO_REF")"
 fi
 
