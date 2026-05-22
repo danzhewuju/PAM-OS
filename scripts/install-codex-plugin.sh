@@ -51,6 +51,7 @@ Options:
   --no-refresh          Do not fetch or clone the managed repo before installing.
   --db PATH             PAM-OS SQLite database path. Default: ~/.pam-os/memory.sqlite3.
   --python VERSION      Python version for uv run --python. Default: 3.12.
+  --uv-bin PATH         uv executable path. Default: auto-detect; falls back to system Python when unavailable.
   --source DIR          Existing pam-os-memory plugin source directory for dev/local installs.
   --codex-skill-dir DIR Install the Codex global skill fallback here. Default: ~/.codex/skills/pam-os-memory.
   --skip-marketplace    Do not create or update the personal plugin marketplace entry.
@@ -63,7 +64,9 @@ Options:
 The default install refreshes a managed PAM-OS repo, copies the plugin from
 that repo, writes a marketplace entry for Codex plugin discovery, and unless
 --skip-mcp-config is passed, registers a stdio MCP server that runs:
-  uv --directory <managed-repo-dir> run --python <version> memory --db <db> mcp
+  <uv-bin> --directory <managed-repo-dir> run --python <version> memory --db <db> mcp
+If uv is unavailable, the installer falls back to:
+  PYTHONPATH=<managed-repo-dir>/src <python> -m pam_os.mcp --db <db>
 
 Pass --repo-dir or --source only for local development installs.
 
@@ -127,6 +130,33 @@ toml_escape() {
   printf "%s" "$1" | sed "s/\\\\/\\\\\\\\/g; s/\"/\\\"/g"
 }
 
+find_uv_bin() {
+  local candidate
+
+  if [[ -n "${PAM_OS_UV_BIN:-}" ]]; then
+    if [[ -x "$PAM_OS_UV_BIN" ]]; then
+      abs_path "$PAM_OS_UV_BIN"
+      return 0
+    fi
+    return 1
+  fi
+
+  candidate="$(type -P uv || true)"
+  if [[ -n "$candidate" && -x "$candidate" ]]; then
+    abs_path "$candidate"
+    return 0
+  fi
+
+  for candidate in "$HOME/.local/bin/uv" "$HOME/.cargo/bin/uv" "/usr/local/bin/uv" "/opt/homebrew/bin/uv" "/usr/bin/uv"; do
+    if [[ -x "$candidate" ]]; then
+      abs_path "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 find_python_bin() {
   local candidate
   for candidate in python3 python py; do
@@ -139,11 +169,25 @@ find_python_bin() {
     printf '%s\n' 'py -3'
     return 0
   fi
-  if command -v uv >/dev/null 2>&1 && uv run --python "$PYTHON_VERSION" python -c 'import sys' >/dev/null 2>&1; then
-    printf 'uv run --python %s python\n' "$PYTHON_VERSION"
+  if [[ -n "$UV_BIN" && -x "$UV_BIN" ]] && "$UV_BIN" run --python "$PYTHON_VERSION" python -c 'import sys' >/dev/null 2>&1; then
+    printf '%s run --python %s python\n' "$UV_BIN" "$PYTHON_VERSION"
     return 0
   fi
   return 1
+}
+
+python_major_minor() {
+  $PYTHON_BIN - <<'PY'
+import sys
+print(f"{sys.version_info.major}.{sys.version_info.minor}")
+PY
+}
+
+python_supports_pam_os() {
+  $PYTHON_BIN - <<'PY'
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+PY
 }
 
 is_pam_repo() {
@@ -233,30 +277,64 @@ find_plugin_source() {
   return 1
 }
 
+prepare_runtime_commands() {
+  local repo_src
+  repo_src="$REPO_DIR/src"
+
+  if [[ -n "$UV_BIN" ]]; then
+    MCP_COMMAND="$UV_BIN"
+    MCP_ARGS=(
+      "--directory" "$REPO_DIR"
+      "run"
+      "--python" "$PYTHON_VERSION"
+      "memory"
+      "--db" "$DB_PATH"
+      "mcp"
+    )
+    MCP_ENV_JSON="{}"
+    INIT_COMMAND="$UV_BIN"
+    INIT_ARGS=(
+      "--directory" "$REPO_DIR"
+      "run"
+      "--python" "$PYTHON_VERSION"
+      "memory"
+      "--db" "$DB_PATH"
+      "init"
+    )
+    INIT_ENV=()
+    RUNTIME_LABEL="uv"
+    return 0
+  fi
+
+  python_supports_pam_os || die "Could not find uv, and fallback Python $(python_major_minor) is too old. PAM-OS requires Python 3.11+."
+  MCP_COMMAND="$PYTHON_BIN"
+  MCP_ARGS=("-m" "pam_os.mcp" "--db" "$DB_PATH")
+  MCP_ENV_JSON="$(printf '{"PYTHONPATH":%s}' "$($PYTHON_BIN - "$repo_src" <<'PY'
+import json
+import sys
+print(json.dumps(sys.argv[1], ensure_ascii=False))
+PY
+)")"
+  INIT_COMMAND="$PYTHON_BIN"
+  INIT_ARGS=("-m" "pam_os.cli" "--db" "$DB_PATH" "init")
+  INIT_ENV=("PYTHONPATH=$repo_src")
+  RUNTIME_LABEL="system Python"
+}
+
 write_mcp_config() {
   local path="$1"
-  $PYTHON_BIN - "$path" "$REPO_DIR" "$PYTHON_VERSION" "$DB_PATH" <<'JSON_WRITER'
+  $PYTHON_BIN - "$path" "$MCP_COMMAND" "$MCP_ENV_JSON" "${MCP_ARGS[@]}" <<'JSON_WRITER'
 import json
 import sys
 from pathlib import Path
 
-path, repo_dir, python_version, db_path = sys.argv[1:]
+path, command, env_json, *args = sys.argv[1:]
 payload = {
     "mcpServers": {
         "pam-os-memory": {
-            "command": "uv",
-            "args": [
-                "--directory",
-                repo_dir,
-                "run",
-                "--python",
-                python_version,
-                "memory",
-                "--db",
-                db_path,
-                "mcp",
-            ],
-            "env": {},
+            "command": command,
+            "args": args,
+            "env": json.loads(env_json),
         }
     }
 }
@@ -297,24 +375,24 @@ run_cli_init() {
     return 0
   fi
 
-  if ! confirm "Initialize PAM-OS memory database and warm up uv with \"memory init\"?" "y"; then
+  if ! confirm "Initialize PAM-OS memory database and warm up the selected runtime?" "y"; then
     warn "Skipped PAM-OS memory database init."
     return 0
   fi
 
-  if ! command -v uv >/dev/null 2>&1; then
-    warn "Could not run init because uv is not installed or not on PATH."
-    warn "Run manually later: uv --directory $REPO_DIR run --python $PYTHON_VERSION memory --db $DB_PATH init"
+  if [[ -z "$INIT_COMMAND" ]]; then
+    warn "Could not run init because no init command was prepared."
+    warn "Run manually later: $MCP_COMMAND ${MCP_ARGS[*]}"
     return 0
   fi
 
-  info "Initializing PAM-OS memory database and warming uv environment"
-  if uv --directory "$REPO_DIR" run --python "$PYTHON_VERSION" memory --db "$DB_PATH" init; then
+  info "Initializing PAM-OS memory database and warming selected runtime"
+  if env "${INIT_ENV[@]}" "$INIT_COMMAND" "${INIT_ARGS[@]}"; then
     return 0
   fi
 
-  warn "PAM-OS memory database init or uv warmup failed."
-  warn "Run manually later: uv --directory $REPO_DIR run --python $PYTHON_VERSION memory --db $DB_PATH init"
+  warn "PAM-OS memory database init or runtime warmup failed."
+  warn "Run manually later: $INIT_COMMAND ${INIT_ARGS[*]}"
 }
 
 install_codex_global_skill() {
@@ -396,28 +474,34 @@ JSON_WRITER
 
 write_codex_mcp_config() {
   local path="$1"
-  $PYTHON_BIN - "$path" "$REPO_DIR" "$PYTHON_VERSION" "$DB_PATH" "$MCP_SERVER_NAME" <<'TOML_WRITER'
+  $PYTHON_BIN - "$path" "$MCP_SERVER_NAME" "$MCP_COMMAND" "$MCP_ENV_JSON" "${MCP_ARGS[@]}" <<'TOML_WRITER'
 import sys
+import json
 from pathlib import Path
 
-path, repo_dir, python_version, db_path, server_name = sys.argv[1:]
+path, server_name, command, env_json, *args = sys.argv[1:]
 config_path = Path(path).expanduser()
 server_header = f"[mcp_servers.{server_name}]"
+
+
+def toml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
 block_lines = [
     server_header,
-    'command = "uv"',
+    f"command = {toml_string(command)}",
     "args = [",
-    f'  "--directory", "{repo_dir}",',
-    '  "run",',
-    f'  "--python", "{python_version}",',
-    '  "memory",',
-    '  "--db",',
-    f'  "{db_path}",',
-    '  "mcp"',
+    *[f"  {toml_string(arg)}," for arg in args],
     "]",
     'description = "PAM-OS local-first long-term memory"',
     "",
 ]
+env = json.loads(env_json)
+if env:
+    block_lines.extend(["[mcp_servers.%s.env]" % server_name])
+    block_lines.extend(f"{key} = {toml_string(str(value))}" for key, value in sorted(env.items()))
+    block_lines.append("")
 
 if config_path.exists():
     lines = config_path.read_text(encoding="utf-8").splitlines()
@@ -467,12 +551,20 @@ REPO_DIR_EXPLICIT=0
 REFRESH_REPO=1
 DB_PATH="$DEFAULT_DB_PATH"
 PYTHON_VERSION="${PAM_OS_CLI_PYTHON:-3.12}"
+UV_BIN="${PAM_OS_UV_BIN:-}"
 SOURCE_DIR=""
 WRITE_MARKETPLACE=1
 WRITE_MCP_CONFIG=1
 WRITE_GLOBAL_SKILL=1
 RUN_INIT=1
 PYTHON_BIN=""
+MCP_COMMAND=""
+MCP_ARGS=()
+MCP_ENV_JSON="{}"
+INIT_COMMAND=""
+INIT_ARGS=()
+INIT_ENV=()
+RUNTIME_LABEL=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -512,6 +604,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --python)
       PYTHON_VERSION="${2:-}"
+      shift 2
+      ;;
+    --uv-bin)
+      UV_BIN="${2:-}"
       shift 2
       ;;
     --source)
@@ -566,12 +662,20 @@ if [[ "$ASSUME_YES" == "0" && ! can_prompt ]]; then
   die "Interactive install requires a TTY. Use --yes for non-interactive installs."
 fi
 
+if [[ -n "$UV_BIN" ]]; then
+  [[ -x "$UV_BIN" ]] || die "--uv-bin must point to an executable uv binary: $UV_BIN"
+  UV_BIN="$(abs_path "$UV_BIN")"
+else
+  UV_BIN="$(find_uv_bin || true)"
+fi
+
 PYTHON_BIN="$(find_python_bin || true)"
 [[ -n "$PYTHON_BIN" ]] || die "Could not find a working Python executable for installer config writes."
 
 resolve_repo_dir
 SOURCE="$(find_plugin_source || true)"
 [[ -n "$SOURCE" ]] || die "Could not find plugin source. Run from a PAM-OS checkout or pass --source."
+prepare_runtime_commands
 
 if [[ -e "$PLUGIN_DIR" ]]; then
   if confirm "Replace existing Codex plugin at $PLUGIN_DIR?" "y"; then
@@ -612,7 +716,7 @@ Next checks:
   3. Open the local plugin marketplace entry if your Codex UI supports plugins.
   4. Ask Codex to list MCP tools and verify the pam_os_memory server is present.
   5. If MCP tools are still empty, run the MCP command below once in a shell
-     to see the uv/runtime error directly.
+     to see the runtime error directly.
 
 Marketplace:
   $MARKETPLACE_PATH
@@ -624,6 +728,12 @@ Managed/runtime repo:
   $REPO_DIR
 
 MCP command:
-  uv --directory $REPO_DIR run --python $PYTHON_VERSION memory --db $DB_PATH mcp
+  $MCP_COMMAND ${MCP_ARGS[*]}
+
+Runtime:
+  $RUNTIME_LABEL
+
+MCP environment:
+  $MCP_ENV_JSON
 
 SUMMARY
