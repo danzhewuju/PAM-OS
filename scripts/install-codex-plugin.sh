@@ -2,12 +2,15 @@
 set -Eeuo pipefail
 
 PLUGIN_NAME="${PAM_OS_PLUGIN_NAME:-pam-os-memory}"
+DEFAULT_REPO_URL="${PAM_OS_REPO_URL:-https://github.com/danzhewuju/PAM-OS.git}"
+DEFAULT_REPO_REF="${PAM_OS_REPO_REF:-master}"
 DEFAULT_REPO_DIR="${PAM_OS_REPO_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/pam-os/repo}"
 DEFAULT_DB_PATH="${PAM_OS_DB:-${PAM_OS_DB_PATH:-$HOME/.pam-os/memory.sqlite3}}"
 DEFAULT_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 DEFAULT_PLUGIN_DIR="$HOME/plugins/$PLUGIN_NAME"
 DEFAULT_MARKETPLACE_PATH="$HOME/.agents/plugins/marketplace.json"
 DEFAULT_CODEX_CONFIG="$DEFAULT_CODEX_HOME/config.toml"
+DEFAULT_CODEX_SKILL_DIR="$DEFAULT_CODEX_HOME/skills/$PLUGIN_NAME"
 MCP_SERVER_NAME="pam_os_memory"
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
@@ -42,18 +45,30 @@ Options:
   --plugin-dir DIR      Destination plugin dir. Default: ~/plugins/pam-os-memory.
   --marketplace PATH    Personal marketplace path. Default: ~/.agents/plugins/marketplace.json.
   --codex-config PATH   Codex config.toml path. Default: ~/.codex/config.toml.
-  --repo-dir DIR        PAM-OS repo used by the MCP server. Default: ~/.local/share/pam-os/repo.
+  --repo-dir DIR        Use an existing PAM-OS repo for MCP/dev mode. Default: managed repo ~/.local/share/pam-os/repo.
+  --repo-url URL        Git repository used to refresh the managed repo. Default: https://github.com/danzhewuju/PAM-OS.git.
+  --ref REF             Git ref used to refresh the managed repo. Default: master.
+  --no-refresh          Do not fetch or clone the managed repo before installing.
   --db PATH             PAM-OS SQLite database path. Default: ~/.pam-os/memory.sqlite3.
   --python VERSION      Python version for uv run --python. Default: 3.12.
-  --source DIR          Existing pam-os-memory plugin source directory.
+  --source DIR          Existing pam-os-memory plugin source directory for dev/local installs.
+  --codex-skill-dir DIR Install the Codex global skill fallback here. Default: ~/.codex/skills/pam-os-memory.
   --skip-marketplace    Do not create or update the personal plugin marketplace entry.
   --skip-mcp-config     Do not register the MCP server in Codex config.toml.
+  --skip-global-skill   Do not install the Codex global skill fallback.
   --yes                 Replace an existing plugin install without prompting.
   -h, --help            Show this help.
 
-The installed plugin writes a marketplace entry for Codex plugin discovery and,
-unless --skip-mcp-config is passed, registers a stdio MCP server that runs:
-  uv --directory <repo-dir> run --python <version> memory --db <db> mcp
+The default install refreshes a managed PAM-OS repo, copies the plugin from
+that repo, writes a marketplace entry for Codex plugin discovery, and unless
+--skip-mcp-config is passed, registers a stdio MCP server that runs:
+  uv --directory <managed-repo-dir> run --python <version> memory --db <db> mcp
+
+Pass --repo-dir or --source only for local development installs.
+
+By default it also installs the bundled skill to ~/.codex/skills/pam-os-memory
+so Codex can load the PAM-OS memory policy even before plugin UI installation
+state is refreshed.
 USAGE
 }
 
@@ -107,37 +122,95 @@ abs_path() {
   fi
 }
 
+toml_escape() {
+  printf "%s" "$1" | sed "s/\\\\/\\\\\\\\/g; s/\"/\\\"/g"
+}
+
+is_pam_repo() {
+  local path="$1"
+  [[ -f "$path/pyproject.toml" && -d "$path/src/pam_os" ]]
+}
+
+refresh_managed_repo() {
+  if [[ "$REFRESH_REPO" != "1" ]]; then
+    return 0
+  fi
+
+  if ! command -v git >/dev/null 2>&1; then
+    die "git is required to refresh the managed PAM-OS repo. Re-run with --no-refresh or --repo-dir."
+  fi
+
+  if [[ -d "$REPO_DIR/.git" ]]; then
+    info "Refreshing managed PAM-OS repo at $REPO_DIR ($REPO_REF)"
+    git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_REF" >/dev/null
+    git -C "$REPO_DIR" checkout -q FETCH_HEAD
+    return 0
+  fi
+
+  if [[ -e "$REPO_DIR" ]]; then
+    die "Managed repo path exists but is not a git checkout: $REPO_DIR"
+  fi
+
+  info "Cloning managed PAM-OS repo into $REPO_DIR ($REPO_REF)"
+  mkdir -p "$(dirname "$REPO_DIR")"
+  git clone --depth 1 --branch "$REPO_REF" "$REPO_URL" "$REPO_DIR" >/dev/null 2>&1 || {
+    warn "Branch clone failed; trying default branch."
+    git clone --depth 1 "$REPO_URL" "$REPO_DIR" >/dev/null 2>&1 || die "Could not clone $REPO_URL"
+  }
+}
+
+infer_repo_from_source() {
+  local source="$1"
+  local candidate
+
+  candidate="$(abs_path "$source/../..")"
+  if is_pam_repo "$candidate"; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  return 1
+}
+
+resolve_repo_dir() {
+  local inferred
+
+  if [[ "$REPO_DIR_EXPLICIT" == "1" ]]; then
+    [[ -e "$REPO_DIR" ]] || die "--repo-dir must point to an existing PAM-OS checkout: $REPO_DIR"
+    REPO_DIR="$(abs_path "$REPO_DIR")"
+    is_pam_repo "$REPO_DIR" || die "--repo-dir is not a PAM-OS checkout: $REPO_DIR"
+    return 0
+  fi
+
+  if [[ -n "$SOURCE_DIR" ]]; then
+    inferred="$(infer_repo_from_source "$SOURCE_DIR" || true)"
+    if [[ -n "$inferred" ]]; then
+      REPO_DIR="$inferred"
+      REFRESH_REPO=0
+      return 0
+    fi
+  fi
+
+  refresh_managed_repo
+  REPO_DIR="$(abs_path "$REPO_DIR")"
+  is_pam_repo "$REPO_DIR" || die "Could not find a PAM-OS repo for MCP mode: $REPO_DIR"
+}
+
 find_plugin_source() {
   local candidate
   local roots=(
     "$SOURCE_DIR"
-    "$WORK_DIR/plugins/$PLUGIN_NAME"
+    "$REPO_DIR/plugins/$PLUGIN_NAME"
   )
-  if [[ -n "$SCRIPT_DIR" ]]; then
-    roots+=("$SCRIPT_DIR/../plugins/$PLUGIN_NAME")
-  fi
+
   for candidate in "${roots[@]}"; do
     if [[ -n "$candidate" && -f "$candidate/.codex-plugin/plugin.json" ]]; then
       abs_path "$candidate"
       return 0
     fi
   done
-  return 1
-}
 
-ensure_repo_dir() {
-  if [[ -f "$REPO_DIR/pyproject.toml" && -d "$REPO_DIR/src/pam_os" ]]; then
-    return 0
-  fi
-  if [[ -f "$WORK_DIR/pyproject.toml" && -d "$WORK_DIR/src/pam_os" ]]; then
-    REPO_DIR="$(abs_path "$WORK_DIR")"
-    return 0
-  fi
-  if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/../pyproject.toml" && -d "$SCRIPT_DIR/../src/pam_os" ]]; then
-    REPO_DIR="$(abs_path "$SCRIPT_DIR/..")"
-    return 0
-  fi
-  die "Could not find a PAM-OS repo for MCP mode: $REPO_DIR"
+  return 1
 }
 
 write_mcp_config() {
@@ -169,6 +242,59 @@ payload = {
 }
 Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 JSON_WRITER
+}
+
+
+write_skill_config() {
+  local path="$1"
+  local escaped_python escaped_repo_dir escaped_db_path
+
+  escaped_python="$(toml_escape "$PYTHON_VERSION")"
+  escaped_repo_dir="$(toml_escape "$REPO_DIR")"
+  escaped_db_path="$(toml_escape "$DB_PATH")"
+
+  cat > "$path" <<CONFIG
+# PAM-OS skill runtime mode.
+# Default is CLI. The Codex plugin also registers MCP tools separately.
+
+mode = "cli"
+
+[cli]
+python = "$escaped_python"
+command = "memory"
+repo_dir = "$escaped_repo_dir"
+db_path = "$escaped_db_path"
+
+[rest]
+url = "http://127.0.0.1:8765"
+username = ""
+password = ""
+CONFIG
+}
+
+install_codex_global_skill() {
+  local src="$1"
+  local dest="$2"
+  local skill_src="$src/skills/$PLUGIN_NAME"
+
+  if [[ ! -f "$skill_src/SKILL.md" ]]; then
+    warn "Plugin does not contain a bundled skill at $skill_src; skipped Codex global skill install."
+    return 0
+  fi
+
+  if [[ -e "$dest" ]]; then
+    if confirm "Replace existing Codex global skill at $dest?" "y"; then
+      rm -rf "$dest"
+    else
+      warn "Skipped Codex global skill install."
+      return 0
+    fi
+  fi
+
+  info "Installing Codex global skill fallback to $dest"
+  mkdir -p "$(dirname "$dest")"
+  cp -R "$skill_src" "$dest"
+  write_skill_config "$dest/config.toml"
 }
 
 
@@ -205,7 +331,7 @@ entry = {
         "path": f"./plugins/{plugin_name}",
     },
     "policy": {
-        "installation": "AVAILABLE",
+        "installation": "INSTALLED_BY_DEFAULT",
         "authentication": "ON_INSTALL",
     },
     "category": "Productivity",
@@ -288,12 +414,18 @@ ASSUME_YES=0
 PLUGIN_DIR="$DEFAULT_PLUGIN_DIR"
 MARKETPLACE_PATH="$DEFAULT_MARKETPLACE_PATH"
 CODEX_CONFIG="$DEFAULT_CODEX_CONFIG"
+CODEX_SKILL_DIR="$DEFAULT_CODEX_SKILL_DIR"
+REPO_URL="$DEFAULT_REPO_URL"
+REPO_REF="$DEFAULT_REPO_REF"
 REPO_DIR="$DEFAULT_REPO_DIR"
+REPO_DIR_EXPLICIT=0
+REFRESH_REPO=1
 DB_PATH="$DEFAULT_DB_PATH"
 PYTHON_VERSION="${PAM_OS_CLI_PYTHON:-3.12}"
 SOURCE_DIR=""
 WRITE_MARKETPLACE=1
 WRITE_MCP_CONFIG=1
+WRITE_GLOBAL_SKILL=1
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -311,7 +443,21 @@ while [[ $# -gt 0 ]]; do
       ;;
     --repo-dir)
       REPO_DIR="${2:-}"
+      REPO_DIR_EXPLICIT=1
+      REFRESH_REPO=0
       shift 2
+      ;;
+    --repo-url)
+      REPO_URL="${2:-}"
+      shift 2
+      ;;
+    --ref)
+      REPO_REF="${2:-}"
+      shift 2
+      ;;
+    --no-refresh)
+      REFRESH_REPO=0
+      shift
       ;;
     --db)
       DB_PATH="${2:-}"
@@ -325,12 +471,20 @@ while [[ $# -gt 0 ]]; do
       SOURCE_DIR="${2:-}"
       shift 2
       ;;
+    --codex-skill-dir)
+      CODEX_SKILL_DIR="${2:-}"
+      shift 2
+      ;;
     --skip-marketplace)
       WRITE_MARKETPLACE=0
       shift
       ;;
     --skip-mcp-config)
       WRITE_MCP_CONFIG=0
+      shift
+      ;;
+    --skip-global-skill)
+      WRITE_GLOBAL_SKILL=0
       shift
       ;;
     --yes|--non-interactive)
@@ -350,6 +504,9 @@ done
 [[ -n "$PLUGIN_DIR" ]] || die "--plugin-dir must not be empty."
 [[ -n "$MARKETPLACE_PATH" ]] || die "--marketplace must not be empty."
 [[ -n "$CODEX_CONFIG" ]] || die "--codex-config must not be empty."
+[[ -n "$CODEX_SKILL_DIR" ]] || die "--codex-skill-dir must not be empty."
+[[ -n "$REPO_URL" ]] || die "--repo-url must not be empty."
+[[ -n "$REPO_REF" ]] || die "--ref must not be empty."
 [[ -n "$REPO_DIR" ]] || die "--repo-dir must not be empty."
 [[ -n "$DB_PATH" ]] || die "--db must not be empty."
 [[ -n "$PYTHON_VERSION" ]] || die "--python must not be empty."
@@ -358,7 +515,7 @@ if [[ "$ASSUME_YES" == "0" && ! can_prompt ]]; then
   die "Interactive install requires a TTY. Use --yes for non-interactive installs."
 fi
 
-ensure_repo_dir
+resolve_repo_dir
 SOURCE="$(find_plugin_source || true)"
 [[ -n "$SOURCE" ]] || die "Could not find plugin source. Run from a PAM-OS checkout or pass --source."
 
@@ -376,6 +533,10 @@ mkdir -p "$(dirname "$PLUGIN_DIR")"
 cp -R "$SOURCE" "$PLUGIN_DIR"
 write_mcp_config "$PLUGIN_DIR/.mcp.json"
 
+if [[ "$WRITE_GLOBAL_SKILL" == "1" ]]; then
+  install_codex_global_skill "$PLUGIN_DIR" "$CODEX_SKILL_DIR"
+fi
+
 if [[ "$WRITE_MARKETPLACE" == "1" ]]; then
   write_marketplace_config "$MARKETPLACE_PATH"
   info "Updated marketplace: $MARKETPLACE_PATH"
@@ -391,11 +552,18 @@ cat <<SUMMARY
 
 Next checks:
   1. Restart Codex.
-  2. Open the local plugin marketplace entry if your Codex UI supports plugins.
-  3. Ask Codex to list MCP tools and verify the pam_os_memory server is present.
+  2. Ask Codex to list skills and verify pam-os-memory is present.
+  3. Open the local plugin marketplace entry if your Codex UI supports plugins.
+  4. Ask Codex to list MCP tools and verify the pam_os_memory server is present.
 
 Marketplace:
   $MARKETPLACE_PATH
+
+Codex global skill:
+  $CODEX_SKILL_DIR
+
+Managed/runtime repo:
+  $REPO_DIR
 
 MCP command:
   uv --directory $REPO_DIR run --python $PYTHON_VERSION memory --db $DB_PATH mcp

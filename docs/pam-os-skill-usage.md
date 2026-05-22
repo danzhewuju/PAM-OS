@@ -36,11 +36,15 @@ plugins/pam-os-memory/
 ./scripts/install-codex-plugin.sh --yes
 ```
 
-安装器会写入三类内容：
+安装器会写入五类内容：
 
+- `~/.local/share/pam-os/repo`：默认托管运行仓库，每次安装会从远端刷新，确保 plugin、skill、MCP runtime 版本一致。
 - `~/plugins/pam-os-memory`：个人 plugin 源目录，供 marketplace 引用。
-- `~/.agents/plugins/marketplace.json`：Codex 个人 marketplace 入口。
-- `~/.codex/config.toml`：`pam_os_memory` MCP server 注册，保证 Codex CLI 重启后可直接发现工具。
+- `~/.agents/plugins/marketplace.json`：Codex 个人 marketplace 入口，并将 `pam-os-memory` 标记为默认安装。
+- `~/.codex/skills/pam-os-memory`：Codex global skill fallback，保证下次启动时能加载 PAM-OS 记忆策略。
+- `~/.codex/config.toml`：`pam_os_memory` MCP server 注册，默认指向 `~/.local/share/pam-os/repo`。
+
+本地开发时才显式传 `--repo-dir /path/to/PAM-OS` 或 `--source /path/to/plugins/pam-os-memory`。重启 Codex 后，skill 策略才会在合适场景触发 PAM 读写；默认只捕获稳定偏好、项目决策、长期目标和纠正，不写入每一轮闲聊。
 
 未来适配 Claude Code 和 OpenCode 时，应复用同一套 MCP adapter 和 skill 策略，只增加客户端包装层。
 
