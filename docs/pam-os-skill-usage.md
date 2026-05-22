@@ -1,19 +1,63 @@
 # PAM-OS Skill 使用指南
 
+## 0. 推荐中期形态：Plugin + MCP + Skill
+
+PAM-OS 的中期集成推荐是：
+
+```text
+Codex Plugin
+  ├─ MCP server registration  # 稳定工具入口
+  └─ pam-os-memory skill      # 何时读写记忆的行为策略
+```
+
+Skill 不再承担主要执行入口。日常优先通过 MCP tools 调用：
+
+- `prepare_context`
+- `capture_memory`
+- `record_behavior_choice`
+- `consolidate_memory`
+- `get_profile`
+- `search_memory`
+
+REST 和 CLI 继续保留作为 fallback。CLI fallback 可能触发 shell 执行授权，因此不再作为最佳体验路径。
+
+当前仓库提供 Codex plugin 包：
+
+```text
+plugins/pam-os-memory/
+  .codex-plugin/plugin.json
+  .mcp.json
+  skills/pam-os-memory/SKILL.md
+```
+
+安装：
+
+```bash
+./scripts/install-codex-plugin.sh --yes
+```
+
+安装器会写入三类内容：
+
+- `~/plugins/pam-os-memory`：个人 plugin 源目录，供 marketplace 引用。
+- `~/.agents/plugins/marketplace.json`：Codex 个人 marketplace 入口。
+- `~/.codex/config.toml`：`pam_os_memory` MCP server 注册，保证 Codex CLI 重启后可直接发现工具。
+
+未来适配 Claude Code 和 OpenCode 时，应复用同一套 MCP adapter 和 skill 策略，只增加客户端包装层。
+
 这份文档说明如何让大模型通过 PAM-OS skill 使用本地长期记忆，并用 skill 自带的配置文件在 CLI 和 REST API 之间切换。
 
 ## 1. 核心策略
 
-PAM-OS skill 不再默认依赖环境变量来选择模式，也不默认走 MCP。
+PAM-OS skill 不再默认依赖环境变量来选择模式。安装 Codex plugin 后，当前策略是：
 
-当前策略是：
 
 ```text
-默认：CLI
-特殊配置：REST API
+优先：MCP tools
+Fallback：REST API
+最后 fallback：CLI
 ```
 
-大模型使用 skill 时，先读取 skill 目录里的 `config.toml`：
+只有 fallback 到 CLI 或 REST 时，大模型才需要读取 skill 目录里的 `config.toml`：
 
 ```text
 Codex:      .agents/skills/pam-os-memory/config.toml

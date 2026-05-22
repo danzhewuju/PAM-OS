@@ -127,6 +127,11 @@ def main(argv: list[str] | None = None) -> int:
 
             serve(host=args.host or config.server.host, port=args.port or config.server.port, db_path=args.db, config=config)
             return 0
+        if args.command == "mcp":
+            from pam_os.mcp import PamOsMcpServer, serve_stdio
+
+            serve_stdio(PamOsMcpServer(runtime))
+            return 0
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -210,6 +215,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve = subparsers.add_parser("serve", help="Run REST API server")
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
+
+    subparsers.add_parser("mcp", help="Run MCP stdio server")
     return parser
 
 

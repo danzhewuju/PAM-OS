@@ -27,6 +27,16 @@ curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master
 
 The installer writes the skill to your user-level client directory and uses `~/.pam-os/memory.sqlite3` as the default shared local memory database.
 
+Codex plugin integration is available in `plugins/pam-os-memory`. It packages the PAM-OS skill with an MCP server registration so Codex can call memory tools instead of relying on repeated shell commands.
+
+Install it from a checkout:
+
+```bash
+./scripts/install-codex-plugin.sh --yes
+```
+
+The installer writes the plugin to `~/plugins/pam-os-memory`, adds a personal marketplace entry at `~/.agents/plugins/marketplace.json`, and registers the `pam_os_memory` MCP server in `~/.codex/config.toml`. Restart Codex after installation.
+
 Use the local CLI directly:
 
 ```powershell
