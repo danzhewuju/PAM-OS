@@ -56,6 +56,7 @@ Options:
   --skip-marketplace    Do not create or update the personal plugin marketplace entry.
   --skip-mcp-config     Do not register the MCP server in Codex config.toml.
   --skip-global-skill   Do not install the Codex global skill fallback.
+  --no-init             Skip running "memory init" after install.
   --yes                 Replace an existing plugin install without prompting.
   -h, --help            Show this help.
 
@@ -124,6 +125,25 @@ abs_path() {
 
 toml_escape() {
   printf "%s" "$1" | sed "s/\\\\/\\\\\\\\/g; s/\"/\\\"/g"
+}
+
+find_python_bin() {
+  local candidate
+  for candidate in python3 python py; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys' >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  if command -v py >/dev/null 2>&1 && py -3 -c 'import sys' >/dev/null 2>&1; then
+    printf '%s\n' 'py -3'
+    return 0
+  fi
+  if command -v uv >/dev/null 2>&1 && uv run --python "$PYTHON_VERSION" python -c 'import sys' >/dev/null 2>&1; then
+    printf 'uv run --python %s python\n' "$PYTHON_VERSION"
+    return 0
+  fi
+  return 1
 }
 
 is_pam_repo() {
@@ -215,7 +235,7 @@ find_plugin_source() {
 
 write_mcp_config() {
   local path="$1"
-  python3 - "$path" "$REPO_DIR" "$PYTHON_VERSION" "$DB_PATH" <<'JSON_WRITER'
+  $PYTHON_BIN - "$path" "$REPO_DIR" "$PYTHON_VERSION" "$DB_PATH" <<'JSON_WRITER'
 import json
 import sys
 from pathlib import Path
@@ -272,6 +292,31 @@ password = ""
 CONFIG
 }
 
+run_cli_init() {
+  if [[ "$RUN_INIT" != "1" ]]; then
+    return 0
+  fi
+
+  if ! confirm "Initialize PAM-OS memory database and warm up uv with \"memory init\"?" "y"; then
+    warn "Skipped PAM-OS memory database init."
+    return 0
+  fi
+
+  if ! command -v uv >/dev/null 2>&1; then
+    warn "Could not run init because uv is not installed or not on PATH."
+    warn "Run manually later: uv --directory $REPO_DIR run --python $PYTHON_VERSION memory --db $DB_PATH init"
+    return 0
+  fi
+
+  info "Initializing PAM-OS memory database and warming uv environment"
+  if uv --directory "$REPO_DIR" run --python "$PYTHON_VERSION" memory --db "$DB_PATH" init; then
+    return 0
+  fi
+
+  warn "PAM-OS memory database init or uv warmup failed."
+  warn "Run manually later: uv --directory $REPO_DIR run --python $PYTHON_VERSION memory --db $DB_PATH init"
+}
+
 install_codex_global_skill() {
   local src="$1"
   local dest="$2"
@@ -300,7 +345,7 @@ install_codex_global_skill() {
 
 write_marketplace_config() {
   local path="$1"
-  python3 - "$path" "$PLUGIN_NAME" <<'JSON_WRITER'
+  $PYTHON_BIN - "$path" "$PLUGIN_NAME" <<'JSON_WRITER'
 import json
 import sys
 from pathlib import Path
@@ -351,7 +396,7 @@ JSON_WRITER
 
 write_codex_mcp_config() {
   local path="$1"
-  python3 - "$path" "$REPO_DIR" "$PYTHON_VERSION" "$DB_PATH" "$MCP_SERVER_NAME" <<'TOML_WRITER'
+  $PYTHON_BIN - "$path" "$REPO_DIR" "$PYTHON_VERSION" "$DB_PATH" "$MCP_SERVER_NAME" <<'TOML_WRITER'
 import sys
 from pathlib import Path
 
@@ -426,6 +471,8 @@ SOURCE_DIR=""
 WRITE_MARKETPLACE=1
 WRITE_MCP_CONFIG=1
 WRITE_GLOBAL_SKILL=1
+RUN_INIT=1
+PYTHON_BIN=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -487,6 +534,10 @@ while [[ $# -gt 0 ]]; do
       WRITE_GLOBAL_SKILL=0
       shift
       ;;
+    --no-init)
+      RUN_INIT=0
+      shift
+      ;;
     --yes|--non-interactive)
       ASSUME_YES=1
       shift
@@ -514,6 +565,9 @@ done
 if [[ "$ASSUME_YES" == "0" && ! can_prompt ]]; then
   die "Interactive install requires a TTY. Use --yes for non-interactive installs."
 fi
+
+PYTHON_BIN="$(find_python_bin || true)"
+[[ -n "$PYTHON_BIN" ]] || die "Could not find a working Python executable for installer config writes."
 
 resolve_repo_dir
 SOURCE="$(find_plugin_source || true)"
@@ -547,6 +601,8 @@ if [[ "$WRITE_MCP_CONFIG" == "1" ]]; then
   info "Registered MCP server '$MCP_SERVER_NAME' in $CODEX_CONFIG"
 fi
 
+run_cli_init
+
 info "Installed: $PLUGIN_DIR"
 cat <<SUMMARY
 
@@ -555,6 +611,8 @@ Next checks:
   2. Ask Codex to list skills and verify pam-os-memory is present.
   3. Open the local plugin marketplace entry if your Codex UI supports plugins.
   4. Ask Codex to list MCP tools and verify the pam_os_memory server is present.
+  5. If MCP tools are still empty, run the MCP command below once in a shell
+     to see the uv/runtime error directly.
 
 Marketplace:
   $MARKETPLACE_PATH
