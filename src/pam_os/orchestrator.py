@@ -1,31 +1,14 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
 
 from pam_os.config import OrchestratorConfig
 from pam_os.context import ContextCompiler
 from pam_os.models import CaptureResult, MemoryUseDecision, PreparedContext, SearchResult
+from pam_os.providers import MemoryPolicy, MemoryReranker, MemoryRetriever
+from pam_os.rule_provider import RuleMemoryPolicy, RuleMemoryReranker, StoreMemoryRetriever
 from pam_os.store import MemoryStore
-
-
-READ_SIGNALS = {
-    "personal_reference": ["我", "我的", "偏好", "风格", "目标", "长期", "之前", "上次", "继续", "记得"],
-    "project_reference": ["项目", "MVP", "Personal AI Memory OS", "PAM-OS", "Memory OS", "当前阶段"],
-    "preference_reference": ["喜欢", "不喜欢", "倾向", "符合我", "按我的", "不要", "希望"],
-    "history_reference": ["之前说过", "历史", "决策", "背景", "上下文", "继续做"],
-}
-
-CAPTURE_SIGNALS = {
-    "preference": ["我偏好", "我喜欢", "我不喜欢", "我倾向", "更希望", "不要一开始"],
-    "goal": ["我的目标", "我希望", "下一步", "计划", "准备做"],
-    "project": ["项目", "决定", "当前阶段", "先用", "不引入", "MVP"],
-    "style": ["回答风格", "以后回答", "直接", "工程化", "少营销"],
-}
-
-GENERIC_QUESTION_MARKERS = ["怎么排序", "是什么", "解释一下", "语法", "报错", "天气", "新闻"]
 
 
 @dataclass(frozen=True)
@@ -54,32 +37,20 @@ class MemoryOrchestrator:
         *,
         config: OrchestratorConfig | None = None,
         profile_limit: int = 8,
+        policy: MemoryPolicy | None = None,
+        retriever: MemoryRetriever | None = None,
+        reranker: MemoryReranker | None = None,
     ):
         self.store = store
         self.compiler = compiler
         self.config = config or OrchestratorConfig()
         self.profile_limit = profile_limit
+        self.policy = policy or RuleMemoryPolicy(self.config)
+        self.retriever = retriever or StoreMemoryRetriever(store)
+        self.reranker = reranker or RuleMemoryReranker()
 
     def should_use_memory(self, task: str, conversation_summary: str | None = None) -> MemoryUseDecision:
-        text = f"{task}\n{conversation_summary or ''}".strip()
-        if not text:
-            return MemoryUseDecision(False, "empty task", 0.0, [])
-
-        signals = self._matched_signals(text, READ_SIGNALS)
-        generic_hits = [marker for marker in GENERIC_QUESTION_MARKERS if marker in text]
-        if generic_hits and not signals:
-            return MemoryUseDecision(False, "generic factual or one-off question", 0.75, generic_hits)
-
-        confidence = min(0.95, 0.25 + 0.18 * len(signals))
-        if "我" in text or "我的" in text:
-            confidence += 0.1
-        if "继续" in text or "之前" in text:
-            confidence += 0.12
-        confidence = min(confidence, 0.95)
-
-        if confidence >= self.config.memory_use_threshold:
-            return MemoryUseDecision(True, "task appears user/project/history dependent", confidence, signals)
-        return MemoryUseDecision(False, "no strong memory-use signal", max(confidence, 0.35), signals)
+        return self.policy.decide_read(task, conversation_summary)
 
     def prepare_context(
         self,
@@ -97,31 +68,15 @@ class MemoryOrchestrator:
         query = self._query_for(task, conversation_summary)
         profile_traits = self._profile_traits_for(query)
         candidate_limit = max(budget.limit * self.config.candidate_multiplier, budget.limit)
-        raw_results = self.store.search_memories(query, limit=candidate_limit)
-        ranked = self._rerank(raw_results)
+        raw_results = self.retriever.retrieve(query, limit=candidate_limit)
+        ranked = self.reranker.rerank(query, raw_results)
         selected = self._apply_budget(ranked, budget)
         package = self.compiler.compile(task, selected, max_chars=budget.max_chars, profile_traits=profile_traits)
         self.store.save_context_package(package)
         return PreparedContext(decision=decision, package=package, results=selected)
 
     def should_capture_memory(self, content: str, metadata: dict[str, Any] | None = None) -> MemoryUseDecision:
-        text = content.strip()
-        if not text:
-            return MemoryUseDecision(False, "empty content", 0.0, [])
-
-        signals = self._matched_signals(text, CAPTURE_SIGNALS)
-        metadata = metadata or {}
-        if metadata.get("explicit_memory") is True:
-            signals.append("explicit_memory")
-
-        confidence = min(0.95, 0.2 + 0.18 * len(signals))
-        if any(marker in text for marker in ["决定", "偏好", "目标", "不引入", "先用"]):
-            confidence += 0.15
-        confidence = min(confidence, 0.95)
-
-        if confidence >= self.config.capture_threshold:
-            return MemoryUseDecision(True, "content contains stable user/project information", confidence, signals)
-        return MemoryUseDecision(False, "content looks transient", max(confidence, 0.3), signals)
+        return self.policy.decide_capture(content, metadata)
 
     def capture_memory(
         self,
@@ -161,24 +116,6 @@ class MemoryOrchestrator:
             reverse=True,
         )[: self.profile_limit]
 
-    def _rerank(self, results: list[SearchResult]) -> list[SearchResult]:
-        now = datetime.now(timezone.utc)
-        reranked: list[SearchResult] = []
-        for result in results:
-            memory = result.memory
-            relevance = self._normalize_relevance(result.score)
-            recency = self._recency_score(memory.updated_at, now)
-            stability = 0.85 if memory.type in {"preference", "goal", "project", "style"} else 0.45
-            score = (
-                relevance * 0.45
-                + memory.importance * 0.25
-                + memory.confidence * 0.15
-                + recency * 0.10
-                + stability * 0.05
-            )
-            reranked.append(SearchResult(memory=memory, score=score))
-        return sorted(reranked, key=lambda item: item.score, reverse=True)
-
     def _apply_budget(self, results: list[SearchResult], budget: ContextBudget) -> list[SearchResult]:
         selected: list[SearchResult] = []
         type_counts: dict[str, int] = {}
@@ -196,23 +133,3 @@ class MemoryOrchestrator:
             if len(selected) >= budget.limit:
                 break
         return selected
-
-    def _matched_signals(self, text: str, signal_map: dict[str, list[str]]) -> list[str]:
-        signals: list[str] = []
-        for signal, markers in signal_map.items():
-            if any(marker.lower() in text.lower() for marker in markers):
-                signals.append(signal)
-        return signals
-
-    def _normalize_relevance(self, raw_score: float) -> float:
-        if raw_score < 0:
-            return min(1.0, abs(raw_score) * 100000)
-        return max(0.0, min(1.0, raw_score))
-
-    def _recency_score(self, updated_at: str, now: datetime) -> float:
-        try:
-            updated = datetime.fromisoformat(updated_at)
-        except ValueError:
-            return 0.3
-        age_days = max(0.0, (now - updated).total_seconds() / 86400)
-        return math.exp(-age_days / 30)

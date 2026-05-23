@@ -120,6 +120,23 @@ class BehaviorEvent:
 
 
 @dataclass(frozen=True)
+class PolicySignal:
+    id: str
+    signal_type: str
+    scope: str
+    pattern: str
+    normalized_intent: str
+    action: str
+    confidence: float
+    support_count: int = 1
+    reject_count: int = 0
+    source: str = "learned"
+    status: str = "candidate"
+    created_at: str = field(default_factory=now_iso)
+    updated_at: str = field(default_factory=now_iso)
+
+
+@dataclass(frozen=True)
 class ConsolidationResult:
     evidence_created: list[ProfileEvidence] = field(default_factory=list)
     traits_updated: list[ProfileTrait] = field(default_factory=list)

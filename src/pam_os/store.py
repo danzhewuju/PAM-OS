@@ -11,10 +11,12 @@ from pam_os.models import (
     ContextPackage,
     Event,
     Memory,
+    PolicySignal,
     ProfileEvidence,
     ProfileTrait,
     SearchResult,
     StorageStats,
+    now_iso,
 )
 
 
@@ -57,6 +59,11 @@ INSPECT_TABLES = {
         "order_by": "created_at DESC",
         "json_columns": {},
         "text_columns": ["id", "source_memory_id", "target_memory_id", "relation"],
+    },
+    "policy_signals": {
+        "order_by": "updated_at DESC",
+        "json_columns": {},
+        "text_columns": ["id", "signal_type", "scope", "pattern", "normalized_intent", "action", "source", "status"],
     },
 }
 
@@ -160,6 +167,23 @@ class MemoryStore:
                   source_ref TEXT,
                   created_at TEXT NOT NULL,
                   consolidated_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS policy_signals (
+                  id TEXT PRIMARY KEY,
+                  signal_type TEXT NOT NULL,
+                  scope TEXT NOT NULL,
+                  pattern TEXT NOT NULL,
+                  normalized_intent TEXT NOT NULL,
+                  action TEXT NOT NULL,
+                  confidence REAL NOT NULL,
+                  support_count INTEGER NOT NULL,
+                  reject_count INTEGER NOT NULL,
+                  source TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL,
+                  UNIQUE(signal_type, pattern, action)
                 );
                 """
             )
@@ -336,6 +360,10 @@ class MemoryStore:
                     "count": self._count_rows(conn, "behavior_events"),
                     "unconsolidated_count": self._count_unconsolidated_behavior_events(conn),
                 },
+                "policy_signals": {
+                    "count": self._count_rows(conn, "policy_signals"),
+                    "by_status": self._grouped_counts(conn, "policy_signals", "status"),
+                },
             }
             latest_write_at = self._latest_write_at(conn)
 
@@ -391,6 +419,7 @@ class MemoryStore:
             "profile_evidence",
             "profile_traits",
             "behavior_events",
+            "policy_signals",
             "memories",
             "events",
         ]
@@ -518,6 +547,124 @@ class MemoryStore:
                     package.created_at,
                 ),
             )
+
+    def upsert_policy_signal(self, signal: PolicySignal) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO policy_signals(
+                  id, signal_type, scope, pattern, normalized_intent, action,
+                  confidence, support_count, reject_count, source, status,
+                  created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(signal_type, pattern, action) DO UPDATE SET
+                  scope = excluded.scope,
+                  normalized_intent = excluded.normalized_intent,
+                  confidence = excluded.confidence,
+                  support_count = excluded.support_count,
+                  reject_count = excluded.reject_count,
+                  source = excluded.source,
+                  status = excluded.status,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    signal.id,
+                    signal.signal_type,
+                    signal.scope,
+                    signal.pattern,
+                    signal.normalized_intent,
+                    signal.action,
+                    signal.confidence,
+                    signal.support_count,
+                    signal.reject_count,
+                    signal.source,
+                    signal.status,
+                    signal.created_at,
+                    signal.updated_at,
+                ),
+            )
+
+    def get_policy_signal(self, signal_type: str, pattern: str, action: str) -> PolicySignal | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM policy_signals
+                WHERE signal_type = ? AND pattern = ? AND action = ?
+                """,
+                (signal_type, pattern, action),
+            ).fetchone()
+        return self._row_to_policy_signal(row) if row else None
+
+    def list_policy_signals(
+        self,
+        *,
+        signal_type: str | None = None,
+        action: str | None = None,
+        statuses: list[str] | None = None,
+        limit: int = 50,
+    ) -> list[PolicySignal]:
+        where = []
+        params: list[Any] = []
+        if signal_type:
+            where.append("signal_type = ?")
+            params.append(signal_type)
+        if action:
+            where.append("action = ?")
+            params.append(action)
+        if statuses:
+            where.append(f"status IN ({','.join('?' for _ in statuses)})")
+            params.extend(statuses)
+        params.append(limit)
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM policy_signals
+                {where_sql}
+                ORDER BY status ASC, confidence DESC, support_count DESC, updated_at DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        return [self._row_to_policy_signal(row) for row in rows]
+
+    def reinforce_policy_signal(
+        self,
+        *,
+        signal_type: str,
+        pattern: str,
+        action: str,
+        supported: bool,
+        confidence_delta: float = 0.08,
+    ) -> PolicySignal | None:
+        signal = self.get_policy_signal(signal_type, pattern, action)
+        if not signal:
+            return None
+        support_count = signal.support_count + (1 if supported else 0)
+        reject_count = signal.reject_count + (0 if supported else 1)
+        confidence = signal.confidence + confidence_delta if supported else signal.confidence - confidence_delta
+        confidence = max(0.0, min(0.98, confidence))
+        status = _policy_signal_status(confidence, support_count, reject_count)
+        updated = PolicySignal(
+            id=signal.id,
+            signal_type=signal.signal_type,
+            scope=signal.scope,
+            pattern=signal.pattern,
+            normalized_intent=signal.normalized_intent,
+            action=signal.action,
+            confidence=confidence,
+            support_count=support_count,
+            reject_count=reject_count,
+            source=signal.source,
+            status=status,
+            created_at=signal.created_at,
+            updated_at=now_iso(),
+        )
+        self.upsert_policy_signal(updated)
+        return updated
 
     def _search_memories_fts(
         self,
@@ -681,6 +828,23 @@ class MemoryStore:
             created_at=row["created_at"],
         )
 
+    def _row_to_policy_signal(self, row: sqlite3.Row) -> PolicySignal:
+        return PolicySignal(
+            id=row["id"],
+            signal_type=row["signal_type"],
+            scope=row["scope"],
+            pattern=row["pattern"],
+            normalized_intent=row["normalized_intent"],
+            action=row["action"],
+            confidence=float(row["confidence"]),
+            support_count=int(row["support_count"]),
+            reject_count=int(row["reject_count"]),
+            source=row["source"],
+            status=row["status"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
     def _list_tables(self, conn: sqlite3.Connection) -> set[str]:
         rows = conn.execute(
             """
@@ -708,6 +872,9 @@ class MemoryStore:
 
         if "behavior_events" in existing_tables:
             counts["behavior_events"]["unconsolidated_count"] = self._count_unconsolidated_behavior_events(conn)
+
+        if "policy_signals" in existing_tables:
+            counts["policy_signals"]["by_status"] = self._grouped_counts(conn, "policy_signals", "status")
 
         return counts
 
@@ -823,6 +990,8 @@ class MemoryStore:
                 SELECT updated_at AS ts FROM profile_traits
                 UNION ALL
                 SELECT created_at AS ts FROM behavior_events
+                UNION ALL
+                SELECT updated_at AS ts FROM policy_signals
             )
             """
         ).fetchone()
@@ -837,6 +1006,7 @@ class MemoryStore:
             ("profile_evidence", "created_at"),
             ("profile_traits", "updated_at"),
             ("behavior_events", "created_at"),
+            ("policy_signals", "updated_at"),
         ]
         selects = [
             f"SELECT {column} AS ts FROM {table}"
@@ -853,3 +1023,13 @@ def re_split_words(query: str) -> list[str]:
     import re
 
     return re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,}", query)
+
+
+def _policy_signal_status(confidence: float, support_count: int, reject_count: int) -> str:
+    if reject_count >= max(2, support_count):
+        return "archived"
+    if confidence >= 0.85 and support_count >= 3:
+        return "stable"
+    if confidence >= 0.62 and support_count >= 1:
+        return "active"
+    return "candidate"

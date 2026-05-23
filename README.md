@@ -2,16 +2,23 @@
 
 Personal AI Memory OS: a local-first memory runtime for AI agents.
 
-PAM-OS gives assistants a durable memory layer they can call before and after a task. It stores raw events, extracts structured memories, retrieves relevant context, consolidates stable profile traits, and returns prompt-ready context packages through CLI, MCP, or REST.
+PAM-OS gives assistants a durable memory layer they can call before and after a task. It stores raw events, extracts structured memories, retrieves relevant context, consolidates stable profile traits, learns when memory should be used, and returns prompt-ready context packages through CLI, MCP, or REST.
 
 ```text
-Raw Events -> Memory Extraction -> SQLite Store -> Retrieval -> Context Package
-                                      |
-                                      v
-                         Behavior Evidence -> Profile Traits
+Task/Event
+  -> Adaptive Memory Policy
+       |-- Learned Policy Signals
+       `-- Rule Policy Fallback
+  -> Memory Extraction / Retrieval / Reranking
+  -> SQLite Store
+       |-- Memories
+       |-- Behavior Evidence
+       |-- Profile Traits
+       `-- Policy Signals
+  -> Context Package
 ```
 
-[![PAM-OS memory architecture](docs/diagrams/memory-architecture.svg)](docs/diagrams/memory-architecture.svg)
+[PAM-OS memory architecture](docs/diagrams/memory-architecture.svg)
 
 ## Why PAM-OS?
 
@@ -22,6 +29,8 @@ Most AI tools are stateless unless each client builds its own memory system. PAM
 - **Prompt-ready retrieval**: `prepare` decides whether memory is needed, retrieves memories, applies budgets, and emits context text.
 - **Selective capture**: `capture` stores stable preferences, goals, project decisions, style guidance, and corrections while skipping transient chat.
 - **Profile consolidation**: behavior choices and repeated evidence can be promoted into stable user traits.
+- **Adaptive policy memory**: PAM-OS can learn reusable read/capture signals from interaction patterns instead of relying only on fixed keywords.
+- **Provider pipeline**: policy, retrieval, reranking, extraction, and consolidation are replaceable interfaces with local rule providers as the default fallback.
 - **Protocol-agnostic core**: the same runtime backs CLI, REST API, and MCP.
 - **No external service required**: the core runtime uses Python and SQLite.
 
@@ -102,16 +111,89 @@ uv run --python 3.12 memory inspect --limit 10
 
 ## Core Concepts
 
-| Concept | Meaning |
-| --- | --- |
-| Event | The raw input record from a conversation, tool, import, or API call. |
-| Memory | Structured long-term information extracted from an event. |
-| Behavior event | A user choice, rejection, or deferral recorded as behavioral evidence. |
-| Profile evidence | Intermediate evidence used to support a profile trait. |
-| Profile trait | A more stable description of user preferences, style, goals, or decision patterns. |
-| Context package | Prompt-ready text compiled for a specific task. |
+
+| Concept          | Meaning                                                                            |
+| ---------------- | ---------------------------------------------------------------------------------- |
+| Event            | The raw input record from a conversation, tool, import, or API call.               |
+| Memory           | Structured long-term information extracted from an event.                          |
+| Behavior event   | A user choice, rejection, or deferral recorded as behavioral evidence.             |
+| Profile evidence | Intermediate evidence used to support a profile trait.                             |
+| Profile trait    | A more stable description of user preferences, style, goals, or decision patterns. |
+| Policy signal    | A learned rule for when PAM-OS should read, capture, suppress, or consolidate memory. |
+| Context package  | Prompt-ready text compiled for a specific task.                                    |
+
 
 Memory types include `preference`, `goal`, `project`, `style`, `episodic`, and `semantic`.
+
+## Memory Architecture
+
+PAM-OS uses a provider pipeline rather than hard-wiring memory behavior into one rule module:
+
+```text
+Task/Event
+  -> MemoryPolicy
+  -> MemoryExtractor
+  -> MemoryStore
+  -> MemoryRetriever
+  -> MemoryReranker
+  -> ContextCompiler
+  -> ProfileConsolidator
+```
+
+The default runtime is still local and deterministic. `AdaptiveMemoryPolicy` checks learned policy signals first, then falls back to the rule policy. This lets PAM-OS learn expressions such as "continue that thread", "use the same style as before", or "remember this for next time" from prior interactions while keeping an offline baseline.
+
+Provider interfaces live in `pam_os.providers`:
+
+- `MemoryPolicy`: decides whether a task should read or capture memory.
+- `MemoryExtractor`: extracts typed memories from events.
+- `MemoryRetriever`: retrieves candidate memories.
+- `MemoryReranker`: orders candidates before budgeting.
+- `ProfileConsolidator`: promotes evidence into stable traits.
+
+The default rule implementations live in `pam_os.rule_provider`. Future LLM or embedding providers can plug into the same interfaces without changing CLI, MCP, REST, or the public runtime methods.
+
+### Policy Memory Layer
+
+Policy memory is memory about how to use memory. It is stored in SQLite as `policy_signals`:
+
+```text
+signal_type       read / capture / consolidate / suppress
+scope             project / style / workflow / technical / general
+pattern           literal text or regex:...
+normalized_intent stable meaning of the pattern
+action            use_memory / capture_memory / skip / consolidate
+confidence        current belief strength
+support_count     positive evidence
+reject_count      negative evidence
+source            seed / user_feedback / observed_behavior / llm
+status            candidate / active / stable / archived
+```
+
+Runtime code can teach new signals directly:
+
+```python
+runtime.learn_policy_signal(
+    signal_type="read",
+    pattern="沿着 Aurora 那条线",
+    normalized_intent="continue_project_thread",
+    action="use_memory",
+    scope="project",
+    confidence=0.72,
+)
+```
+
+After that, a request containing "沿着 Aurora 那条线" can trigger memory retrieval even if it does not match the seed keyword rules. Signals can also be reinforced or rejected over time:
+
+```python
+runtime.reinforce_policy_signal(
+    signal_type="read",
+    pattern="沿着 Aurora 那条线",
+    action="use_memory",
+    supported=True,
+)
+```
+
+This is the local foundation for an optional LLM teacher. A future LLM provider can propose candidate policy signals, but PAM-OS stores and evaluates them locally with confidence, evidence counts, and status transitions.
 
 ## Recommended Agent Workflow
 
@@ -229,22 +311,24 @@ curl http://127.0.0.1:8765/health
 
 Core endpoints:
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/health` | Health, database path, and FTS status. |
-| `GET` | `/storage/stats` | Storage statistics. |
-| `GET` | `/memory/inspect` | Inspect tables and diagnostic rows. |
-| `POST` | `/events` | Add a raw event and optionally extract memories. |
-| `GET` | `/memories/search?q=...` | Search memories. |
-| `GET` | `/memory/should-use?task=...` | Decide whether a task should use memory. |
-| `POST` | `/context/prepare` | Prepare prompt-ready memory context. |
-| `POST` | `/memory/capture` | Selectively capture stable memory. |
-| `POST` | `/behavior/choice` | Record a choice as behavior evidence. |
-| `POST` | `/memory/consolidate` | Consolidate memories and behavior into profile traits. |
-| `GET` | `/profile` | Read profile traits. |
-| `POST` | `/context/compile` | Compile context directly from search results. |
-| `POST` | `/reflect` | Summarize recent memories as context. |
-| `POST` | `/memory/clear` | Clear all memory data with confirmation. |
+
+| Method | Path                          | Purpose                                                |
+| ------ | ----------------------------- | ------------------------------------------------------ |
+| `GET`  | `/health`                     | Health, database path, and FTS status.                 |
+| `GET`  | `/storage/stats`              | Storage statistics.                                    |
+| `GET`  | `/memory/inspect`             | Inspect tables and diagnostic rows.                    |
+| `POST` | `/events`                     | Add a raw event and optionally extract memories.       |
+| `GET`  | `/memories/search?q=...`      | Search memories.                                       |
+| `GET`  | `/memory/should-use?task=...` | Decide whether a task should use memory.               |
+| `POST` | `/context/prepare`            | Prepare prompt-ready memory context.                   |
+| `POST` | `/memory/capture`             | Selectively capture stable memory.                     |
+| `POST` | `/behavior/choice`            | Record a choice as behavior evidence.                  |
+| `POST` | `/memory/consolidate`         | Consolidate memories and behavior into profile traits. |
+| `GET`  | `/profile`                    | Read profile traits.                                   |
+| `POST` | `/context/compile`            | Compile context directly from search results.          |
+| `POST` | `/reflect`                    | Summarize recent memories as context.                  |
+| `POST` | `/memory/clear`               | Clear all memory data with confirmation.               |
+
 
 ## Configuration
 
@@ -272,15 +356,17 @@ export PAM_OS_AUTH_PASSWORD="change-me"
 
 Important config sections:
 
-| Section | Purpose |
-| --- | --- |
-| `[storage]` | SQLite database path. |
-| `[server]` | REST host, port, and optional Basic Auth. |
-| `[context]` | Memory count, context character budget, and profile injection limit. |
-| `[consolidation]` | Evidence scan window and profile stability growth settings. |
-| `[orchestrator]` | Read/capture thresholds and candidate expansion. |
-| `[retrieval]` | Query term extraction settings. |
-| `[profile]` | Default profile query limit. |
+
+| Section           | Purpose                                                              |
+| ----------------- | -------------------------------------------------------------------- |
+| `[storage]`       | SQLite database path.                                                |
+| `[server]`        | REST host, port, and optional Basic Auth.                            |
+| `[context]`       | Memory count, context character budget, and profile injection limit. |
+| `[consolidation]` | Evidence scan window and profile stability growth settings.          |
+| `[orchestrator]`  | Read/capture thresholds and candidate expansion.                     |
+| `[retrieval]`     | Query term extraction settings.                                      |
+| `[profile]`       | Default profile query limit.                                         |
+
 
 See [config/pam-os.example.toml](config/pam-os.example.toml) for the full template.
 
@@ -291,10 +377,13 @@ PAM-OS/
   src/pam_os/
     runtime.py        # protocol-agnostic memory runtime
     store.py          # SQLite schema, writes, retrieval, inspection
-    extractor.py      # rule-based MVP extractor
-    orchestrator.py   # memory read/capture decisions, reranking, budgets
+    providers.py      # provider protocols for policy, retrieval, reranking, extraction, consolidation
+    adaptive_policy.py # learned policy signals plus rule fallback
+    rule_provider.py  # default local rule providers
+    extractor.py      # default local memory extractor
+    orchestrator.py   # provider pipeline coordinator and context budgets
     context.py        # prompt-ready context compiler
-    consolidator.py   # behavior/profile consolidation
+    consolidator.py   # compatibility wrapper for the default profile consolidator
     cli.py            # memory CLI
     api.py            # REST API
     mcp.py            # MCP stdio server
@@ -327,8 +416,10 @@ uv run --python 3.12 memory inspect --limit 20
 
 PAM-OS is intentionally small today. The current runtime is the executable foundation for a larger personal memory layer:
 
-- richer extraction behind the existing extractor interface
-- better consolidation and contradiction handling
+- richer extraction behind the provider interface
+- optional LLM policy teacher for proposing learned policy signals
+- optional embedding and hybrid retrieval providers
+- better consolidation and contradiction handling through profile consolidator providers
 - broader MCP/client packaging
 - import/export and migration tools
 - stronger diagnostics for memory quality and retrieval behavior

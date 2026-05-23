@@ -5,7 +5,56 @@ import json
 from pam_os.api import create_app
 from pam_os.cli import main
 from pam_os.config import load_config
+from pam_os.models import ConsolidationResult, MemoryUseDecision, SearchResult
 from pam_os.runtime import PersonalMemoryRuntime
+
+
+class AlwaysReadPolicy:
+    def decide_read(self, task, conversation_summary=None):
+        return MemoryUseDecision(True, "fake read policy", 0.99, ["fake"])
+
+    def decide_capture(self, content, metadata=None):
+        return MemoryUseDecision(True, "fake capture policy", 0.99, ["fake"])
+
+
+class NeverCapturePolicy:
+    def decide_read(self, task, conversation_summary=None):
+        return MemoryUseDecision(False, "fake no read policy", 0.99, ["fake"])
+
+    def decide_capture(self, content, metadata=None):
+        return MemoryUseDecision(False, "fake no capture policy", 0.99, ["fake"])
+
+
+class StaticRetriever:
+    def __init__(self, results):
+        self.results = results
+        self.queries = []
+
+    def retrieve(
+        self,
+        query,
+        *,
+        limit,
+        types=None,
+        min_importance=0.0,
+        min_confidence=0.0,
+    ):
+        self.queries.append(query)
+        return self.results[:limit]
+
+
+class ReverseReranker:
+    def rerank(self, query, results):
+        return list(reversed(results))
+
+
+class EmptyConsolidator:
+    def __init__(self):
+        self.calls = 0
+
+    def consolidate(self, *, recent=100):
+        self.calls += 1
+        return ConsolidationResult(memories_scanned=recent, behavior_events_scanned=0)
 
 
 def test_memory_roundtrip(tmp_path):
@@ -86,6 +135,133 @@ def test_capture_memory_skips_transient_content(tmp_path):
     assert captured.memories
 
 
+def test_policy_provider_can_force_read_and_capture(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3", policy=AlwaysReadPolicy())
+
+    captured = runtime.capture_memory("哈哈好的")
+    prepared = runtime.prepare_context("Python list 怎么排序？")
+
+    assert captured.should_capture is True
+    assert captured.reason == "fake capture policy"
+    assert prepared.decision.should_use is True
+    assert prepared.decision.reason == "fake read policy"
+
+
+def test_policy_provider_can_skip_capture(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3", policy=NeverCapturePolicy())
+
+    captured = runtime.capture_memory("我偏好 self-host、开源、可控系统。")
+
+    assert captured.should_capture is False
+    assert captured.reason == "fake no capture policy"
+
+
+def test_adaptive_policy_learns_read_signal(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+    runtime.capture_memory("用户项目上下文：Aurora 项目正在做本地插件架构。", force=True)
+
+    before = runtime.prepare_context("沿着 Aurora 那条线推进一下")
+    signal = runtime.learn_policy_signal(
+        signal_type="read",
+        pattern="沿着 Aurora 那条线",
+        normalized_intent="continue_project_thread",
+        action="use_memory",
+        scope="project",
+        confidence=0.72,
+    )
+    after = runtime.prepare_context("沿着 Aurora 那条线推进一下")
+
+    assert before.decision.should_use is False
+    assert signal.status == "active"
+    assert after.decision.should_use is True
+    assert after.decision.reason == "learned policy signal matched"
+    assert after.package is not None
+    assert "Aurora" in after.package.content
+
+
+def test_adaptive_policy_learns_capture_signal(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+    runtime.learn_policy_signal(
+        signal_type="capture",
+        pattern="以后遇到这种情况",
+        normalized_intent="durable_future_instruction",
+        action="capture_memory",
+        scope="workflow",
+        confidence=0.7,
+    )
+
+    captured = runtime.capture_memory("以后遇到这种情况，默认先给我两个方案再推荐一个。")
+
+    assert captured.should_capture is True
+    assert captured.reason == "learned policy signal matched"
+    assert captured.memories
+
+
+def test_policy_signal_reinforcement_promotes_and_archives(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+    runtime.learn_policy_signal(
+        signal_type="read",
+        pattern="接着那条线",
+        normalized_intent="continue_thread",
+        action="use_memory",
+        confidence=0.7,
+    )
+
+    promoted = runtime.reinforce_policy_signal(
+        signal_type="read",
+        pattern="接着那条线",
+        action="use_memory",
+        supported=True,
+    )
+    promoted = runtime.reinforce_policy_signal(
+        signal_type="read",
+        pattern="接着那条线",
+        action="use_memory",
+        supported=True,
+    )
+    rejected = runtime.reinforce_policy_signal(
+        signal_type="read",
+        pattern="接着那条线",
+        action="use_memory",
+        supported=False,
+    )
+
+    assert promoted is not None
+    assert promoted.status == "stable"
+    assert rejected is not None
+    assert rejected.reject_count == 1
+    assert runtime.list_policy_signals(signal_type="read", action="use_memory")
+
+
+def test_retriever_and_reranker_providers_can_be_injected(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+    first = runtime.capture_memory("我偏好第一种方案。", force=True).memories[0]
+    second = runtime.capture_memory("我偏好第二种方案。", force=True).memories[0]
+    retriever = StaticRetriever([SearchResult(first, 0.1), SearchResult(second, 0.9)])
+
+    runtime = PersonalMemoryRuntime(
+        db_path=tmp_path / "memory.sqlite3",
+        policy=AlwaysReadPolicy(),
+        retriever=retriever,
+        reranker=ReverseReranker(),
+    )
+    prepared = runtime.prepare_context("按我的偏好继续")
+
+    assert prepared.package is not None
+    assert retriever.queries == ["按我的偏好继续"]
+    assert [result.memory.id for result in prepared.results] == [second.id, first.id]
+
+
+def test_consolidator_provider_can_be_injected(tmp_path):
+    consolidator = EmptyConsolidator()
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3", consolidator=consolidator)
+
+    result = runtime.consolidate_memory(recent=7)
+
+    assert consolidator.calls == 1
+    assert result.memories_scanned == 7
+
+
 def test_behavior_choice_consolidates_into_profile_trait(tmp_path):
     runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
 
@@ -100,7 +276,7 @@ def test_behavior_choice_consolidates_into_profile_trait(tmp_path):
     traits = runtime.get_user_profile(query="Personal AI Memory OS 技术路线")
 
     assert result.evidence_created
-    assert any(trait.trait_key == "technical.decision_style" for trait in traits)
+    assert any(trait.trait_key == "general.decision_style" for trait in traits)
 
 
 def test_prepare_context_includes_profile_traits(tmp_path):

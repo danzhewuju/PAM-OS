@@ -3,12 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from pam_os.adaptive_policy import AdaptiveMemoryPolicy, PolicySignalLearner
 from pam_os.config import AppConfig, default_db_path, load_config
 from pam_os.context import ContextCompiler
-from pam_os.consolidator import MemoryConsolidator
-from pam_os.extractor import Extractor, RuleBasedExtractor
+from pam_os.extractor import RuleBasedExtractor
 from pam_os.models import BehaviorEvent, ContextPackage, Event, Memory, SearchResult, StorageStats, new_id
 from pam_os.orchestrator import ContextBudget, MemoryOrchestrator
+from pam_os.providers import MemoryExtractor, MemoryPolicy, MemoryReranker, MemoryRetriever, ProfileConsolidator
+from pam_os.rule_provider import RuleProfileConsolidator
 from pam_os.store import MemoryStore
 
 
@@ -16,20 +18,29 @@ class PersonalMemoryRuntime:
     def __init__(
         self,
         db_path: Path | str | None = None,
-        extractor: Extractor | None = None,
+        extractor: MemoryExtractor | None = None,
+        policy: MemoryPolicy | None = None,
+        retriever: MemoryRetriever | None = None,
+        reranker: MemoryReranker | None = None,
+        consolidator: ProfileConsolidator | None = None,
         config: AppConfig | None = None,
     ):
         self.config = config or load_config()
         self.store = MemoryStore(db_path or default_db_path(self.config), retrieval_config=self.config.retrieval)
         self.extractor = extractor or RuleBasedExtractor()
         self.compiler = ContextCompiler()
+        self.policy_learner = PolicySignalLearner(self.store)
+        policy = policy or AdaptiveMemoryPolicy(self.store, config=self.config.orchestrator)
         self.orchestrator = MemoryOrchestrator(
             self.store,
             self.compiler,
             config=self.config.orchestrator,
             profile_limit=self.config.context.profile_limit,
+            policy=policy,
+            retriever=retriever,
+            reranker=reranker,
         )
-        self.consolidator = MemoryConsolidator(self.store, config=self.config.consolidation)
+        self.consolidator = consolidator or RuleProfileConsolidator(self.store, config=self.config.consolidation)
 
     @property
     def db_path(self) -> Path:
@@ -171,6 +182,57 @@ class PersonalMemoryRuntime:
 
     def get_user_profile(self, *, limit: int | None = None, query: str | None = None):
         return self.store.list_profile_traits(limit=limit or self.config.profile.default_limit, query=query)
+
+    def learn_policy_signal(
+        self,
+        *,
+        signal_type: str,
+        pattern: str,
+        normalized_intent: str,
+        action: str,
+        scope: str = "general",
+        confidence: float = 0.66,
+        source: str = "user_feedback",
+    ):
+        return self.policy_learner.learn_signal(
+            signal_type=signal_type,
+            pattern=pattern,
+            normalized_intent=normalized_intent,
+            action=action,
+            scope=scope,
+            confidence=confidence,
+            source=source,
+        )
+
+    def reinforce_policy_signal(
+        self,
+        *,
+        signal_type: str,
+        pattern: str,
+        action: str,
+        supported: bool,
+    ):
+        return self.policy_learner.reinforce_signal(
+            signal_type=signal_type,
+            pattern=pattern,
+            action=action,
+            supported=supported,
+        )
+
+    def list_policy_signals(
+        self,
+        *,
+        signal_type: str | None = None,
+        action: str | None = None,
+        statuses: list[str] | None = None,
+        limit: int = 50,
+    ):
+        return self.store.list_policy_signals(
+            signal_type=signal_type,
+            action=action,
+            statuses=statuses,
+            limit=limit,
+        )
 
     def reflect(self, *, recent: int = 50) -> ContextPackage:
         memories = self.store.recent_memories(limit=recent)
