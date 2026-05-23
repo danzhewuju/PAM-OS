@@ -11,6 +11,10 @@ DEFAULT_PLUGIN_DIR="$HOME/plugins/$PLUGIN_NAME"
 DEFAULT_MARKETPLACE_PATH="$HOME/.agents/plugins/marketplace.json"
 DEFAULT_CODEX_CONFIG="$DEFAULT_CODEX_HOME/config.toml"
 DEFAULT_CODEX_SKILL_DIR="$DEFAULT_CODEX_HOME/skills/$PLUGIN_NAME"
+DEFAULT_CLAUDE_SKILL_DIR="$HOME/.claude/skills/$PLUGIN_NAME"
+DEFAULT_OPENCODE_AGENTS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/AGENTS.md"
+DEFAULT_HERMES_CONFIG="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
+DEFAULT_HERMES_AGENTS_FILE="${HERMES_HOME:-$HOME/.hermes}/AGENTS.md"
 MCP_SERVER_NAME="pam_os_memory"
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
@@ -36,15 +40,29 @@ die() {
 
 usage() {
   cat <<USAGE
-PAM-OS Codex plugin installer
+PAM-OS plugin installer
 
 Usage:
-  ./scripts/install-codex-plugin.sh [options]
+  ./scripts/install-plugin.sh [options]
 
 Options:
+  --target TARGET      Install target: codex, claude, opencode, hermes, or all. Can be repeated.
+  --codex             Install the Codex plugin, global skill fallback, and MCP config.
+  --claude            Install the Claude Code global skill.
+  --opencode          Install OpenCode compatibility guidance and Claude-compatible skill.
+  --hermes            Install Hermes MCP config and guidance.
+  --all               Install all supported targets.
   --plugin-dir DIR      Destination plugin dir. Default: ~/plugins/pam-os-memory.
   --marketplace PATH    Personal marketplace path. Default: ~/.agents/plugins/marketplace.json.
   --codex-config PATH   Codex config.toml path. Default: ~/.codex/config.toml.
+  --claude-skill-dir DIR
+                      Claude Code skill dir. Default: ~/.claude/skills/pam-os-memory.
+  --opencode-agents PATH
+                      OpenCode AGENTS.md path. Default: ~/.config/opencode/AGENTS.md.
+  --hermes-config PATH
+                      Hermes config.yaml path. Default: ~/.hermes/config.yaml.
+  --hermes-agents PATH
+                      Hermes AGENTS.md path. Default: ~/.hermes/AGENTS.md.
   --repo-dir DIR        Use an existing PAM-OS repo for MCP/dev mode. Default: managed repo ~/.local/share/pam-os/repo.
   --repo-url URL        Git repository used to refresh the managed repo. Default: https://github.com/danzhewuju/PAM-OS.git.
   --ref REF             Git ref used to refresh the managed repo. Default: master.
@@ -61,8 +79,11 @@ Options:
   --yes                 Replace an existing plugin install without prompting.
   -h, --help            Show this help.
 
-The default install refreshes a managed PAM-OS repo, copies the plugin from
-that repo, writes a marketplace entry for Codex plugin discovery, and unless
+Without a target option, the installer prompts for one or more targets. With
+--yes and no target option, it installs Codex only.
+
+The Codex target refreshes a managed PAM-OS repo, copies the plugin from that
+repo, writes a marketplace entry for Codex plugin discovery, and unless
 --skip-mcp-config is passed, registers a stdio MCP server that runs:
   <uv-bin> --directory <managed-repo-dir> run --python <version> memory --db <db> mcp
 If uv is unavailable, the installer falls back to:
@@ -117,6 +138,93 @@ confirm() {
   done
 }
 
+select_install_targets() {
+  local selection item
+
+  printf '\nInstall targets:\n'
+  printf '  1) codex     - Codex plugin + MCP + global skill fallback\n'
+  printf '  2) claude    - Claude Code global skill (%s)\n' "$CLAUDE_SKILL_DIR"
+  printf '  3) opencode  - OpenCode guidance (%s)\n' "$OPENCODE_AGENTS_FILE"
+  printf '  4) hermes    - Hermes MCP config + guidance (%s)\n' "$HERMES_CONFIG"
+  printf '  5) all\n'
+  printf '\nSelect one or more targets, separated by commas or spaces.\n'
+
+  while true; do
+    read_user selection 'Selection [1]: '
+    selection="${selection:-1}"
+    selection="${selection//,/ }"
+
+    INSTALL_CODEX=0
+    INSTALL_CLAUDE=0
+    INSTALL_OPENCODE=0
+    INSTALL_HERMES=0
+
+    for item in $selection; do
+      case "$item" in
+        1|codex|Codex|CODEX)
+          INSTALL_CODEX=1
+          ;;
+        2|claude|Claude|CLAUDE|claude-code|Claude-Code)
+          INSTALL_CLAUDE=1
+          ;;
+        3|opencode|OpenCode|OPENCODE)
+          INSTALL_OPENCODE=1
+          ;;
+        4|hermes|Hermes|HERMES)
+          INSTALL_HERMES=1
+          ;;
+        5|all|All|ALL)
+          INSTALL_CODEX=1
+          INSTALL_CLAUDE=1
+          INSTALL_OPENCODE=1
+          INSTALL_HERMES=1
+          ;;
+        *)
+          warn "Unknown target: $item"
+          INSTALL_CODEX=0
+          INSTALL_CLAUDE=0
+          INSTALL_OPENCODE=0
+          INSTALL_HERMES=0
+          break
+          ;;
+      esac
+    done
+
+    if [[ "$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE$INSTALL_HERMES" != "0000" ]]; then
+      return 0
+    fi
+
+    printf 'Please select at least one valid target.\n'
+  done
+}
+
+enable_target() {
+  local target="$1"
+  case "$target" in
+    codex)
+      INSTALL_CODEX=1
+      ;;
+    claude|claude-code)
+      INSTALL_CLAUDE=1
+      ;;
+    opencode)
+      INSTALL_OPENCODE=1
+      ;;
+    hermes)
+      INSTALL_HERMES=1
+      ;;
+    all)
+      INSTALL_CODEX=1
+      INSTALL_CLAUDE=1
+      INSTALL_OPENCODE=1
+      INSTALL_HERMES=1
+      ;;
+    *)
+      die "Unknown target: $target"
+      ;;
+  esac
+}
+
 abs_path() {
   local path="$1"
   if command -v realpath >/dev/null 2>&1; then
@@ -128,6 +236,10 @@ abs_path() {
 
 toml_escape() {
   printf "%s" "$1" | sed "s/\\\\/\\\\\\\\/g; s/\"/\\\"/g"
+}
+
+timestamp() {
+  date '+%Y%m%d-%H%M%S'
 }
 
 find_uv_bin() {
@@ -269,6 +381,26 @@ find_plugin_source() {
 
   for candidate in "${roots[@]}"; do
     if [[ -n "$candidate" && -f "$candidate/.codex-plugin/plugin.json" ]]; then
+      abs_path "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+find_skill_source() {
+  local candidate
+  local roots=(
+    "$REPO_DIR/skills/$PLUGIN_NAME"
+    "$REPO_DIR/.agents/skills/$PLUGIN_NAME"
+    "$REPO_DIR/.claude/skills/$PLUGIN_NAME"
+    "$REPO_DIR/plugins/$PLUGIN_NAME/skills/$PLUGIN_NAME"
+    "$SOURCE_DIR/skills/$PLUGIN_NAME"
+  )
+
+  for candidate in "${roots[@]}"; do
+    if [[ -n "$candidate" && -f "$candidate/SKILL.md" ]]; then
       abs_path "$candidate"
       return 0
     fi
@@ -420,6 +552,178 @@ install_codex_global_skill() {
   write_skill_config "$dest/config.toml"
 }
 
+install_global_skill() {
+  local src="$1"
+  local dest="$2"
+  local label="$3"
+
+  if [[ ! -f "$src/SKILL.md" ]]; then
+    warn "Skill source is invalid at $src; skipped $label."
+    return 0
+  fi
+
+  if [[ -e "$dest" ]]; then
+    if confirm "Replace existing $label at $dest?" "y"; then
+      rm -rf "$dest"
+    else
+      warn "Skipped $label."
+      return 0
+    fi
+  fi
+
+  info "Installing $label to $dest"
+  mkdir -p "$(dirname "$dest")"
+  cp -R "$src" "$dest"
+  write_skill_config "$dest/config.toml"
+}
+
+append_managed_guidance() {
+  local file="$1"
+  local skill_path="$2"
+  local start='<!-- PAM-OS memory plugin: begin -->'
+  local end='<!-- PAM-OS memory plugin: end -->'
+  local tmp
+
+  mkdir -p "$(dirname "$file")"
+  if [[ -f "$file" ]]; then
+    local backup="${file}.bak.$(timestamp)"
+    info "Backing up $file -> $backup"
+    cp "$file" "$backup"
+  fi
+
+  tmp="$(mktemp "${TMPDIR:-/tmp}/pam-os-agents.XXXXXX")"
+
+  if [[ -f "$file" ]]; then
+    awk -v start="$start" -v end="$end" '
+      $0 == start {skip=1; next}
+      $0 == end {skip=0; next}
+      skip != 1 {print}
+    ' "$file" > "$tmp"
+  else
+    : > "$tmp"
+  fi
+
+  {
+    if [[ -s "$tmp" ]]; then
+      printf '\n'
+    fi
+    printf '%s\n' "$start"
+    printf '## PAM-OS Memory\n\n'
+    printf 'Use PAM-OS as local long-term memory when a task depends on user preferences, project history, prior decisions, long-term goals, answer style, or an explicit request to remember something.\n\n'
+    printf 'Prefer the PAM-OS MCP server when available. If a compatible skill is available, use it; otherwise read the installed skill instructions from `%s`.\n\n' "$skill_path"
+    printf 'Do not store secrets or sensitive details unless the user explicitly asks to remember them.\n'
+    printf '%s\n' "$end"
+  } >> "$tmp"
+
+  mv "$tmp" "$file"
+}
+
+install_claude() {
+  local src="$1"
+  install_global_skill "$src" "$CLAUDE_SKILL_DIR" "Claude Code global skill"
+}
+
+install_opencode() {
+  local src="$1"
+
+  info "Installing OpenCode compatibility"
+  if [[ "$INSTALL_CLAUDE" == "1" ]]; then
+    info "Claude-compatible skill target is already handled by the Claude Code install."
+  else
+    install_global_skill "$src" "$CLAUDE_SKILL_DIR" "OpenCode Claude-compatible skill"
+  fi
+
+  append_managed_guidance "$OPENCODE_AGENTS_FILE" "$CLAUDE_SKILL_DIR/SKILL.md"
+  printf 'Updated: %s\n' "$OPENCODE_AGENTS_FILE"
+}
+
+write_hermes_mcp_config() {
+  local path="$1"
+  $PYTHON_BIN - "$path" "$MCP_SERVER_NAME" "$MCP_COMMAND" "$MCP_ENV_JSON" "${MCP_ARGS[@]}" <<'YAML_WRITER'
+import json
+import sys
+from pathlib import Path
+
+path, server_name, command, env_json, *args = sys.argv[1:]
+config_path = Path(path).expanduser()
+server_header = f"  {server_name}:"
+
+
+def yaml_scalar(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+block_lines = [
+    server_header,
+    f"    command: {yaml_scalar(command)}",
+    "    args:",
+    *[f"      - {yaml_scalar(arg)}" for arg in args],
+]
+env = json.loads(env_json)
+if env:
+    block_lines.append("    env:")
+    block_lines.extend(f"      {key}: {yaml_scalar(str(value))}" for key, value in sorted(env.items()))
+
+if config_path.exists():
+    lines = config_path.read_text(encoding="utf-8").splitlines()
+else:
+    lines = []
+
+output = []
+index = 0
+in_mcp = False
+replaced = False
+found_mcp = False
+while index < len(lines):
+    line = lines[index]
+    stripped = line.strip()
+    if line == "mcp_servers:":
+        found_mcp = True
+        in_mcp = True
+        output.append(line)
+        index += 1
+        continue
+    if in_mcp and line.startswith("  ") and stripped == f"{server_name}:":
+        output.extend(block_lines)
+        replaced = True
+        index += 1
+        while index < len(lines):
+            next_line = lines[index]
+            if next_line and not next_line.startswith("    ") and not next_line.startswith("      "):
+                break
+            index += 1
+        continue
+    if in_mcp and line and not line.startswith(" "):
+        if not replaced:
+            output.extend(block_lines)
+            replaced = True
+        in_mcp = False
+    output.append(line)
+    index += 1
+
+if not found_mcp:
+    if output and output[-1].strip():
+        output.append("")
+    output.append("mcp_servers:")
+    output.extend(block_lines)
+elif not replaced:
+    output.extend(block_lines)
+
+config_path.parent.mkdir(parents=True, exist_ok=True)
+config_path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+YAML_WRITER
+}
+
+install_hermes() {
+  local skill_src="$1"
+
+  info "Installing Hermes compatibility"
+  write_hermes_mcp_config "$HERMES_CONFIG"
+  append_managed_guidance "$HERMES_AGENTS_FILE" "$skill_src/SKILL.md"
+  printf 'Updated: %s\n' "$HERMES_CONFIG"
+  printf 'Updated: %s\n' "$HERMES_AGENTS_FILE"
+}
+
 
 write_marketplace_config() {
   local path="$1"
@@ -540,10 +844,18 @@ TOML_WRITER
 }
 
 ASSUME_YES=0
+INSTALL_CODEX=0
+INSTALL_CLAUDE=0
+INSTALL_OPENCODE=0
+INSTALL_HERMES=0
 PLUGIN_DIR="$DEFAULT_PLUGIN_DIR"
 MARKETPLACE_PATH="$DEFAULT_MARKETPLACE_PATH"
 CODEX_CONFIG="$DEFAULT_CODEX_CONFIG"
 CODEX_SKILL_DIR="$DEFAULT_CODEX_SKILL_DIR"
+CLAUDE_SKILL_DIR="$DEFAULT_CLAUDE_SKILL_DIR"
+OPENCODE_AGENTS_FILE="$DEFAULT_OPENCODE_AGENTS_FILE"
+HERMES_CONFIG="$DEFAULT_HERMES_CONFIG"
+HERMES_AGENTS_FILE="$DEFAULT_HERMES_AGENTS_FILE"
 REPO_URL="$DEFAULT_REPO_URL"
 REPO_REF="$DEFAULT_REPO_REF"
 REPO_DIR="$DEFAULT_REPO_DIR"
@@ -568,6 +880,30 @@ RUNTIME_LABEL=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --target)
+      enable_target "${2:-}"
+      shift 2
+      ;;
+    --codex)
+      INSTALL_CODEX=1
+      shift
+      ;;
+    --claude)
+      INSTALL_CLAUDE=1
+      shift
+      ;;
+    --opencode)
+      INSTALL_OPENCODE=1
+      shift
+      ;;
+    --hermes)
+      INSTALL_HERMES=1
+      shift
+      ;;
+    --all)
+      enable_target all
+      shift
+      ;;
     --plugin-dir)
       PLUGIN_DIR="${2:-}"
       shift 2
@@ -578,6 +914,22 @@ while [[ $# -gt 0 ]]; do
       ;;
     --codex-config)
       CODEX_CONFIG="${2:-}"
+      shift 2
+      ;;
+    --claude-skill-dir)
+      CLAUDE_SKILL_DIR="${2:-}"
+      shift 2
+      ;;
+    --opencode-agents)
+      OPENCODE_AGENTS_FILE="${2:-}"
+      shift 2
+      ;;
+    --hermes-config)
+      HERMES_CONFIG="${2:-}"
+      shift 2
+      ;;
+    --hermes-agents)
+      HERMES_AGENTS_FILE="${2:-}"
       shift 2
       ;;
     --repo-dir)
@@ -652,6 +1004,10 @@ done
 [[ -n "$MARKETPLACE_PATH" ]] || die "--marketplace must not be empty."
 [[ -n "$CODEX_CONFIG" ]] || die "--codex-config must not be empty."
 [[ -n "$CODEX_SKILL_DIR" ]] || die "--codex-skill-dir must not be empty."
+[[ -n "$CLAUDE_SKILL_DIR" ]] || die "--claude-skill-dir must not be empty."
+[[ -n "$OPENCODE_AGENTS_FILE" ]] || die "--opencode-agents must not be empty."
+[[ -n "$HERMES_CONFIG" ]] || die "--hermes-config must not be empty."
+[[ -n "$HERMES_AGENTS_FILE" ]] || die "--hermes-agents must not be empty."
 [[ -n "$REPO_URL" ]] || die "--repo-url must not be empty."
 [[ -n "$REPO_REF" ]] || die "--ref must not be empty."
 [[ -n "$REPO_DIR" ]] || die "--repo-dir must not be empty."
@@ -660,6 +1016,18 @@ done
 
 if [[ "$ASSUME_YES" == "0" && ! can_prompt ]]; then
   die "Interactive install requires a TTY. Use --yes for non-interactive installs."
+fi
+
+if [[ "$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE$INSTALL_HERMES" == "0000" ]]; then
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    INSTALL_CODEX=1
+  else
+    select_install_targets
+  fi
+fi
+
+if [[ "$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE$INSTALL_HERMES" == "0000" ]]; then
+  die "No install targets selected."
 fi
 
 if [[ -n "$UV_BIN" ]]; then
@@ -673,56 +1041,84 @@ PYTHON_BIN="$(find_python_bin || true)"
 [[ -n "$PYTHON_BIN" ]] || die "Could not find a working Python executable for installer config writes."
 
 resolve_repo_dir
-SOURCE="$(find_plugin_source || true)"
-[[ -n "$SOURCE" ]] || die "Could not find plugin source. Run from a PAM-OS checkout or pass --source."
+if [[ "$INSTALL_CODEX" == "1" ]]; then
+  SOURCE="$(find_plugin_source || true)"
+  [[ -n "$SOURCE" ]] || die "Could not find plugin source. Run from a PAM-OS checkout or pass --source."
+else
+  SOURCE=""
+fi
+SKILL_SOURCE="$(find_skill_source || true)"
+if [[ "$INSTALL_CLAUDE$INSTALL_OPENCODE$INSTALL_HERMES" != "000" || "$WRITE_GLOBAL_SKILL" == "1" ]]; then
+  [[ -n "$SKILL_SOURCE" ]] || die "Could not find skill source. Run from a PAM-OS checkout or pass --source."
+fi
 prepare_runtime_commands
 
-if [[ -e "$PLUGIN_DIR" ]]; then
-  if confirm "Replace existing Codex plugin at $PLUGIN_DIR?" "y"; then
-    rm -rf "$PLUGIN_DIR"
-  else
-    warn "Skipped install."
-    exit 0
+if [[ "$INSTALL_CODEX" == "1" ]]; then
+  if [[ -e "$PLUGIN_DIR" ]]; then
+    if confirm "Replace existing Codex plugin at $PLUGIN_DIR?" "y"; then
+      rm -rf "$PLUGIN_DIR"
+    else
+      warn "Skipped Codex plugin install."
+      INSTALL_CODEX=0
+    fi
+  fi
+
+  if [[ "$INSTALL_CODEX" == "1" ]]; then
+    info "Installing Codex plugin from $SOURCE"
+    mkdir -p "$(dirname "$PLUGIN_DIR")"
+    cp -R "$SOURCE" "$PLUGIN_DIR"
+    write_mcp_config "$PLUGIN_DIR/.mcp.json"
+
+    if [[ "$WRITE_GLOBAL_SKILL" == "1" ]]; then
+      install_codex_global_skill "$PLUGIN_DIR" "$CODEX_SKILL_DIR"
+    fi
+
+    if [[ "$WRITE_MARKETPLACE" == "1" ]]; then
+      write_marketplace_config "$MARKETPLACE_PATH"
+      info "Updated marketplace: $MARKETPLACE_PATH"
+    fi
+
+    if [[ "$WRITE_MCP_CONFIG" == "1" ]]; then
+      write_codex_mcp_config "$CODEX_CONFIG"
+      info "Registered MCP server '$MCP_SERVER_NAME' in $CODEX_CONFIG"
+    fi
   fi
 fi
 
-info "Installing Codex plugin from $SOURCE"
-mkdir -p "$(dirname "$PLUGIN_DIR")"
-cp -R "$SOURCE" "$PLUGIN_DIR"
-write_mcp_config "$PLUGIN_DIR/.mcp.json"
-
-if [[ "$WRITE_GLOBAL_SKILL" == "1" ]]; then
-  install_codex_global_skill "$PLUGIN_DIR" "$CODEX_SKILL_DIR"
+if [[ "$INSTALL_CLAUDE" == "1" ]]; then
+  install_claude "$SKILL_SOURCE"
 fi
 
-if [[ "$WRITE_MARKETPLACE" == "1" ]]; then
-  write_marketplace_config "$MARKETPLACE_PATH"
-  info "Updated marketplace: $MARKETPLACE_PATH"
+if [[ "$INSTALL_OPENCODE" == "1" ]]; then
+  install_opencode "$SKILL_SOURCE"
 fi
 
-if [[ "$WRITE_MCP_CONFIG" == "1" ]]; then
-  write_codex_mcp_config "$CODEX_CONFIG"
-  info "Registered MCP server '$MCP_SERVER_NAME' in $CODEX_CONFIG"
+if [[ "$INSTALL_HERMES" == "1" ]]; then
+  install_hermes "$SKILL_SOURCE"
 fi
 
 run_cli_init
 
-info "Installed: $PLUGIN_DIR"
+info "Install complete"
 cat <<SUMMARY
 
 Next checks:
-  1. Restart Codex.
-  2. Ask Codex to list skills and verify pam-os-memory is present.
-  3. Open the local plugin marketplace entry if your Codex UI supports plugins.
-  4. Ask Codex to list MCP tools and verify the pam_os_memory server is present.
-  5. If MCP tools are still empty, run the MCP command below once in a shell
-     to see the runtime error directly.
+  Codex:   restart Codex, list skills, and verify the pam_os_memory MCP server.
+  Claude:  restart Claude Code, then list skills or invoke /pam-os-memory.
+  OpenCode: restart opencode so it reloads AGENTS.md guidance.
+  Hermes:  restart Hermes and verify the pam_os_memory MCP server is listed.
 
 Marketplace:
   $MARKETPLACE_PATH
 
-Codex global skill:
+Skill paths:
   $CODEX_SKILL_DIR
+  $CLAUDE_SKILL_DIR
+
+Guidance/config:
+  $OPENCODE_AGENTS_FILE
+  $HERMES_CONFIG
+  $HERMES_AGENTS_FILE
 
 Managed/runtime repo:
   $REPO_DIR

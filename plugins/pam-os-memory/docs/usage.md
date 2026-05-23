@@ -8,7 +8,7 @@ This plugin packages PAM-OS for Codex with:
 Install from a PAM-OS checkout:
 
 ```bash
-./scripts/install-codex-plugin.sh --yes
+./scripts/install-plugin.sh --codex --yes
 ```
 
 The installer refreshes the managed PAM-OS repo at `~/.local/share/pam-os/repo`, writes the plugin to `~/plugins/pam-os-memory`, creates or updates `~/.agents/plugins/marketplace.json` with the plugin installed by default, installs the bundled skill to `~/.codex/skills/pam-os-memory`, and registers `pam_os_memory` in `~/.codex/config.toml`.

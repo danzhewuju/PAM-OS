@@ -49,24 +49,23 @@ Use this when your client supports Skills or project instructions, but does not 
 curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-skill.sh | bash
 ```
 
-### Codex Plugin + MCP
+### Plugin + MCP
 
-Use this for Codex plugin integration. The installer maintains a managed PAM-OS checkout at `~/.local/share/pam-os/repo`, installs the plugin from that checkout, and points the MCP server at the same checkout so plugin, skill, and runtime versions stay aligned.
+Use this for Codex, Claude Code, OpenCode, or Hermes integration. The installer maintains a managed PAM-OS checkout at `~/.local/share/pam-os/repo`, installs the selected client integration, and points MCP-capable clients at the same checkout so plugin, skill, and runtime versions stay aligned.
 
 ```bash
-./scripts/install-codex-plugin.sh --yes
+./scripts/install-plugin.sh
 ```
 
 The plugin installer writes:
 
 - `~/.local/share/pam-os/repo`, refreshed from the configured Git ref by default
-- `~/plugins/pam-os-memory`
-- `~/.agents/plugins/marketplace.json` with `pam-os-memory` installed by default
-- `~/.codex/plugins/pam-os-memory` indirectly when Codex refreshes plugins
-- `~/.codex/skills/pam-os-memory` as a global skill fallback
-- `~/.codex/config.toml` with the `pam_os_memory` MCP server registration
+- Codex: `~/plugins/pam-os-memory`, `~/.agents/plugins/marketplace.json`, `~/.codex/skills/pam-os-memory`, and `~/.codex/config.toml`
+- Claude Code: `~/.claude/skills/pam-os-memory`
+- OpenCode: `~/.config/opencode/AGENTS.md` plus the Claude-compatible skill
+- Hermes: `~/.hermes/config.yaml` and `~/.hermes/AGENTS.md`
 
-For local development, pass `--repo-dir /path/to/PAM-OS` or `--source /path/to/plugins/pam-os-memory`. Restart Codex after installation. The skill policy decides when to capture memory; it records stable preferences, project decisions, goals, and corrections, not every chat turn.
+For local development, pass `--repo-dir /path/to/PAM-OS` or `--source /path/to/plugins/pam-os-memory`. For non-interactive Codex installs, run `./scripts/install-plugin.sh --codex --yes`. Restart the selected client after installation. The skill policy decides when to capture memory; it records stable preferences, project decisions, goals, and corrections, not every chat turn.
 
 ## Quick Start
 

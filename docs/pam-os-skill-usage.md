@@ -21,7 +21,7 @@ Skill 不再承担主要执行入口。日常优先通过 MCP tools 调用：
 
 REST 和 CLI 继续保留作为 fallback。CLI fallback 可能触发 shell 执行授权，因此不再作为最佳体验路径。
 
-当前仓库提供 Codex plugin 包：
+当前仓库提供 Codex plugin 包，并通过统一安装器支持 Codex、Claude Code、OpenCode 和 Hermes：
 
 ```text
 plugins/pam-os-memory/
@@ -33,10 +33,10 @@ plugins/pam-os-memory/
 安装：
 
 ```bash
-./scripts/install-codex-plugin.sh --yes
+./scripts/install-plugin.sh
 ```
 
-安装器会写入五类内容：
+安装器会让用户选择目标客户端。Codex 目标会写入：
 
 - `~/.local/share/pam-os/repo`：默认托管运行仓库，每次安装会从远端刷新，确保 plugin、skill、MCP runtime 版本一致。
 - `~/plugins/pam-os-memory`：个人 plugin 源目录，供 marketplace 引用。
@@ -44,9 +44,13 @@ plugins/pam-os-memory/
 - `~/.codex/skills/pam-os-memory`：Codex global skill fallback，保证下次启动时能加载 PAM-OS 记忆策略。
 - `~/.codex/config.toml`：`pam_os_memory` MCP server 注册，默认指向 `~/.local/share/pam-os/repo`。
 
-本地开发时才显式传 `--repo-dir /path/to/PAM-OS` 或 `--source /path/to/plugins/pam-os-memory`。重启 Codex 后，skill 策略才会在合适场景触发 PAM 读写；默认只捕获稳定偏好、项目决策、长期目标和纠正，不写入每一轮闲聊。
+其他目标会写入：
 
-未来适配 Claude Code 和 OpenCode 时，应复用同一套 MCP adapter 和 skill 策略，只增加客户端包装层。
+- Claude Code：`~/.claude/skills/pam-os-memory`
+- OpenCode：`~/.config/opencode/AGENTS.md`，并复用 Claude-compatible skill
+- Hermes：`~/.hermes/config.yaml` 和 `~/.hermes/AGENTS.md`
+
+本地开发时才显式传 `--repo-dir /path/to/PAM-OS` 或 `--source /path/to/plugins/pam-os-memory`。非交互 Codex 安装可以运行 `./scripts/install-plugin.sh --codex --yes`。重启客户端后，skill 策略才会在合适场景触发 PAM 读写；默认只捕获稳定偏好、项目决策、长期目标和纠正，不写入每一轮闲聊。
 
 这份文档说明如何让大模型通过 PAM-OS skill 使用本地长期记忆，并用 skill 自带的配置文件在 CLI 和 REST API 之间切换。
 
