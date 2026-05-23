@@ -782,14 +782,29 @@ write_codex_mcp_config() {
 import sys
 import json
 from pathlib import Path
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11
+    tomllib = None
 
 path, server_name, command, env_json, *args = sys.argv[1:]
 config_path = Path(path).expanduser()
 server_header = f"[mcp_servers.{server_name}]"
+server_child_prefix = f"[mcp_servers.{server_name}."
 
 
 def toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def is_table_header(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith("[") and stripped.endswith("]")
+
+
+def is_managed_server_header(line: str) -> bool:
+    stripped = line.strip()
+    return stripped == server_header or stripped.startswith(server_child_prefix)
 
 
 block_lines = [
@@ -817,13 +832,13 @@ index = 0
 replaced = False
 while index < len(lines):
     line = lines[index]
-    if line.strip() == server_header:
-        output.extend(block_lines)
-        replaced = True
+    if is_managed_server_header(line):
+        if not replaced:
+            output.extend(block_lines)
+            replaced = True
         index += 1
         while index < len(lines):
-            stripped = lines[index].strip()
-            if stripped.startswith("[") and stripped.endswith("]"):
+            if is_table_header(lines[index]) and not is_managed_server_header(lines[index]):
                 break
             index += 1
         continue
@@ -839,7 +854,10 @@ if not replaced:
     output.extend(block_lines)
 
 config_path.parent.mkdir(parents=True, exist_ok=True)
-config_path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+rendered = "\n".join(output).rstrip() + "\n"
+if tomllib is not None:
+    tomllib.loads(rendered)
+config_path.write_text(rendered, encoding="utf-8")
 TOML_WRITER
 }
 
