@@ -92,6 +92,8 @@ class PamOsMcpServer:
             raise JsonRpcError(-32602, f"unknown tool: {name}")
 
         result = to_plain(handler(arguments))
+        if isinstance(result, list):
+            result = {"items": result}
         return {
             "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, indent=2)}],
             "structuredContent": result,
