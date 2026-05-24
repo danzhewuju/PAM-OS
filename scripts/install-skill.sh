@@ -105,8 +105,11 @@ read_user() {
   local prompt="$2"
 
   printf -v "$__result_var" '%s' ''
-  if [[ -r /dev/tty && -w /dev/tty ]] && read -r -p "$prompt" "$__result_var" 2>/dev/null < /dev/tty; then
-    return 0
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    printf '%s' "$prompt" > /dev/tty
+    if read -r "$__result_var" < /dev/tty; then
+      return 0
+    fi
   fi
 
   if [[ -t 0 ]] && read -r -p "$prompt" "$__result_var"; then
@@ -121,9 +124,12 @@ read_secret_user() {
   local prompt="$2"
 
   printf -v "$__result_var" '%s' ''
-  if [[ -r /dev/tty && -w /dev/tty ]] && read -r -s -p "$prompt" "$__result_var" 2>/dev/null < /dev/tty; then
-    printf '\n' > /dev/tty
-    return 0
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    printf '%s' "$prompt" > /dev/tty
+    if read -r -s "$__result_var" < /dev/tty; then
+      printf '\n' > /dev/tty
+      return 0
+    fi
   fi
 
   if [[ -t 0 ]] && read -r -s -p "$prompt" "$__result_var"; then
