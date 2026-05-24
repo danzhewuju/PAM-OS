@@ -87,15 +87,17 @@ can_prompt() {
   [[ -r /dev/tty && -w /dev/tty ]] || [[ -t 0 && -t 1 ]]
 }
 
-is_windows_shell() {
-  case "$(uname -s 2>/dev/null || printf unknown)" in
-    MINGW*|MSYS*|CYGWIN*) return 0 ;;
-    *) return 1 ;;
-  esac
+is_pipe_install() {
+  [[ ! -t 0 ]]
 }
 
-is_windows_pipe() {
-  is_windows_shell && [[ ! -t 0 ]]
+pipe_install_hint() {
+  printf 'Pipe installs cannot read interactive answers in this terminal.\n' >&2
+  printf 'Choose targets explicitly, for example:\n' >&2
+  printf '  curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-skill.sh | bash -s -- --codex --yes\n' >&2
+  printf 'Or download the script first, then run it interactively:\n' >&2
+  printf '  curl -fsSLO https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-skill.sh\n' >&2
+  printf '  bash install-skill.sh\n' >&2
 }
 
 read_user() {
@@ -103,7 +105,7 @@ read_user() {
   local prompt="$2"
 
   printf -v "$__result_var" '%s' ''
-  if [[ -r /dev/tty && -w /dev/tty ]] && read -r -p "$prompt" "$__result_var" < /dev/tty; then
+  if [[ -r /dev/tty && -w /dev/tty ]] && read -r -p "$prompt" "$__result_var" 2>/dev/null < /dev/tty; then
     return 0
   fi
 
@@ -119,7 +121,7 @@ read_secret_user() {
   local prompt="$2"
 
   printf -v "$__result_var" '%s' ''
-  if [[ -r /dev/tty && -w /dev/tty ]] && read -r -s -p "$prompt" "$__result_var" < /dev/tty; then
+  if [[ -r /dev/tty && -w /dev/tty ]] && read -r -s -p "$prompt" "$__result_var" 2>/dev/null < /dev/tty; then
     printf '\n' > /dev/tty
     return 0
   fi
@@ -150,6 +152,9 @@ confirm() {
 
   while true; do
     if ! read_user reply "$prompt $suffix "; then
+      if is_pipe_install; then
+        pipe_install_hint
+      fi
       die "Interactive prompt requires a TTY. Re-run with --yes or explicit options."
     fi
     reply="${reply:-$default}"
@@ -172,6 +177,9 @@ prompt_value() {
   fi
 
   if ! read_user reply "$prompt [$default]: "; then
+    if is_pipe_install; then
+      pipe_install_hint
+    fi
     die "Interactive prompt requires a TTY. Pass an explicit option or use --yes."
   fi
   printf '%s' "${reply:-$default}"
@@ -187,6 +195,9 @@ prompt_secret() {
   fi
 
   if ! read_secret_user reply "$prompt (leave empty for none): "; then
+    if is_pipe_install; then
+      pipe_install_hint
+    fi
     die "Interactive prompt requires a TTY. Pass explicit REST options or use --yes."
   fi
   printf '%s' "$reply"
@@ -194,12 +205,6 @@ prompt_secret() {
 
 select_install_targets() {
   local selection item
-
-  if is_windows_pipe; then
-    INSTALL_CODEX=1
-    warn "Interactive target selection is unreliable with Windows pipe installs; using default target: codex. Pass --target to choose explicitly."
-    return 0
-  fi
 
   printf '\nInstall targets:\n'
   printf '  1) codex      - Codex global skill (%s)\n' "$CODEX_DEFAULT_DIR"
@@ -210,7 +215,12 @@ select_install_targets() {
   printf '\nSelect one or more targets, separated by commas or spaces.\n'
 
   while true; do
-    read_user selection 'Selection [1]: '
+    if ! read_user selection 'Selection [1]: '; then
+      if is_pipe_install; then
+        pipe_install_hint
+      fi
+      die "Interactive target selection requires a TTY."
+    fi
     selection="${selection:-1}"
     selection="${selection//,/ }"
 
@@ -359,6 +369,9 @@ prepare_dest() {
     printf '  3) abort\n'
     local choice
     if ! read_user choice 'Selection [1]: '; then
+      if is_pipe_install; then
+        pipe_install_hint
+      fi
       die "Existing install requires an interactive choice. Re-run with --yes to replace it."
     fi
     choice="${choice:-1}"
@@ -680,7 +693,7 @@ if [[ -z "$DB_PATH" ]]; then
   die "--db must not be empty."
 fi
 
-if [[ "$ASSUME_YES" == "0" && ! can_prompt && ! is_windows_pipe ]]; then
+if [[ "$ASSUME_YES" == "0" && ! can_prompt ]]; then
   die "Interactive install requires a TTY. Use --yes with explicit options for non-interactive installs."
 fi
 
@@ -701,14 +714,16 @@ fi
 if [[ -z "$MODE_ARG" ]]; then
   if [[ "$ASSUME_YES" == "1" ]]; then
     INSTALL_MODE="cli"
-  elif is_windows_pipe; then
-    INSTALL_MODE="cli"
-    warn "Interactive runtime mode selection is unreliable with Windows pipe installs; using default mode: cli. Pass --mode to choose explicitly."
   else
     printf '\nRuntime mode:\n'
     printf '  1) cli  - no long-running server; model runs the local memory CLI\n'
     printf '  2) rest - model calls a running PAM-OS REST server\n'
-    read_user mode_choice 'Selection [1]: '
+    if ! read_user mode_choice 'Selection [1]: '; then
+      if is_pipe_install; then
+        pipe_install_hint
+      fi
+      die "Interactive runtime mode selection requires a TTY. Pass --mode cli or --mode rest."
+    fi
     mode_choice="${mode_choice:-1}"
     case "$mode_choice" in
       1|cli) INSTALL_MODE="cli" ;;
