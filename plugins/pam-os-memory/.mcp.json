@@ -4,13 +4,13 @@
       "command": "uv",
       "args": [
         "--directory",
-        "/home/alex/.local/share/pam-os/repo",
+        "../..",
         "run",
         "--python",
         "3.12",
         "memory",
         "--db",
-        "/home/alex/.pam-os/memory.sqlite3",
+        "~/.pam-os/memory.sqlite3",
         "mcp"
       ],
       "env": {}

@@ -1,11 +1,22 @@
 # PAM-OS 使用文档
 
-PAM-OS 是一个本地优先的 Personal AI Memory OS MVP。它提供一套轻量的个人记忆运行时，把对话或外部事件保存为原始事件，抽取为结构化记忆，写入 SQLite，再按任务检索并编译成可直接放进模型提示词的上下文。
+PAM-OS 是一个本地优先的 Personal AI Memory OS MVP。它提供一套轻量的个人记忆运行时，把对话或外部事件保存为原始事件，抽取为结构化记忆，写入 SQLite，再按任务检索并编译成可直接放进模型提示词的上下文。当前同一套运行时同时服务 CLI、MCP 和 REST。
 
 当前版本的主链路是：
 
 ```text
-Raw Event -> Memory Extraction -> SQLite Memory Store -> Retrieval -> Context Compilation
+Task/Event
+  -> Adaptive Memory Policy
+       |-- Learned Policy Signals
+       `-- Rule Policy Fallback
+  -> Provider Pipeline
+       |-- Extraction / Retrieval / Reranking
+       `-- Profile Consolidation
+  -> SQLite Store
+       |-- Events / Memories / Behavior Evidence
+       |-- Profile Traits
+       `-- Policy Signals
+  -> Context Package
 ```
 
 它适合用于：
@@ -14,7 +25,7 @@ Raw Event -> Memory Extraction -> SQLite Memory Store -> Retrieval -> Context Co
 - 在回答前自动准备与用户、项目、历史决策相关的记忆上下文。
 - 在回答后捕获稳定信息，而跳过短暂闲聊。
 - 通过行为选择逐步形成更稳定的用户画像。
-- 通过 CLI 或 REST API 接入其他工具。
+- 通过 MCP、CLI 或 REST API 接入其他工具。
 
 ## 1. 环境要求
 
@@ -75,15 +86,21 @@ PAM-OS/
     cli.py                    CLI 入口
     runtime.py                核心运行时门面
     store.py                  SQLite 存储、检索、画像表操作
+    providers.py              记忆策略、检索、重排、抽取、巩固接口
+    adaptive_policy.py        学习到的 policy signal 与规则 fallback
+    rule_provider.py          默认本地规则 provider
     extractor.py              规则抽取器
-    orchestrator.py           记忆读写决策、预算、重排
+    orchestrator.py           provider pipeline 协调、预算、重排
     context.py                上下文编译器
-    consolidator.py           画像证据与画像特征巩固
+    consolidator.py           默认画像巩固兼容封装
     api.py                    REST API
+    mcp.py                    MCP stdio server
     config.py                 配置加载
     models.py                 数据模型
   tests/
     test_runtime.py           端到端运行时测试
+    test_mcp.py               MCP 协议与工具测试
+    test_api_auth.py          REST 认证和清空接口测试
   pyproject.toml              包配置、命令入口、可选依赖
 ```
 
@@ -192,6 +209,10 @@ Current task: ...
 
 `prepare` 和 `compile` 都会保存生成过的上下文包。
 
+### 5.5 Policy Signal
+
+Policy signal 是 PAM-OS 关于“什么时候应该使用记忆”的记忆。它存储在 `policy_signals` 表中，包含触发模式、作用范围、动作、置信度、支持/拒绝次数和状态。`AdaptiveMemoryPolicy` 会先检查已学习的 policy signal，再回退到本地规则 provider。
+
 ## 6. 推荐工作流
 
 ### 6.1 模型回答前：使用 `prepare`
@@ -290,18 +311,18 @@ uv run --python 3.12 memory profile --query "技术路线"
 PAM-OS 接入大模型客户端时，建议把职责拆成两层：
 
 ```text
-REST API = 给模型真实工具能力：prepare_context、capture_memory、search_memory 等
-Skill    = 给模型操作策略：什么时候读记忆、什么时候写记忆、什么不要保存
+MCP tools = 给模型稳定工具能力：prepare_context、capture_memory、search_memory 等
+Skill     = 给模型操作策略：什么时候读记忆、什么时候写记忆、什么不要保存
 ```
 
-也就是说，Skill 负责“会判断”，运行模式负责“怎么调用”。默认推荐 CLI + Skill：不需要启动长驻 REST 服务，模型按 skill 说明运行本地 `memory` 命令。只有当你明确选择 REST 模式时，才需要启动 REST server 并配置 REST URL。
+也就是说，Skill 负责“会判断”，MCP/REST/CLI 负责“怎么调用”。当前推荐 `Plugin + MCP + Skill`：MCP 是日常优先工具入口，REST 和 CLI 保留为 fallback。只有当你明确选择 REST 模式时，才需要启动 REST server 并配置 REST URL。
 
-本仓库已经内置两个项目级 Skill：
+本仓库提供两种安装方式：
 
-| 客户端 | Skill 路径 | 作用 |
+| 方式 | 适用场景 | 默认安装位置 |
 | --- | --- | --- |
-| Codex | `.agents/skills/pam-os-memory/SKILL.md` | Codex 会在仓库内自动扫描 repo skill。 |
-| Claude Code | `.claude/skills/pam-os-memory/SKILL.md` | Claude Code 会在仓库内自动扫描 project skill。 |
+| `scripts/install-plugin.sh` | Codex plugin、MCP 工具注册，以及 Claude Code/OpenCode/Hermes 集成 | `~/plugins/pam-os-memory`、`~/.codex/skills/pam-os-memory`、`~/.codex/config.toml` 等 |
+| `scripts/install-skill.sh` | 只需要全局 skill fallback，或客户端暂不使用 plugin/MCP | `~/.codex/skills/pam-os-memory`、`~/.claude/skills/pam-os-memory`、`~/.config/cc-switch/skills/pam-os-memory` 等 |
 
 Skill 的触发场景包括：
 
@@ -310,15 +331,34 @@ Skill 的触发场景包括：
 - 用户明确要求“记住这个”。
 - 用户在多个选项中选择、拒绝或暂缓某些方案。
 
-#### Codex CLI / IDE
+#### Plugin + MCP
 
-Codex 支持从 repo、user、admin 和 system 位置读取 Skills。当前仓库的 Codex Skill 已放在：
+推荐安装：
 
-```text
-.agents/skills/pam-os-memory/SKILL.md
+```powershell
+./scripts/install-plugin.sh --codex --yes
 ```
 
-在项目根目录启动 Codex 后，可以让 Codex 检查：
+Codex 目标会写入：
+
+- `~/.local/share/pam-os/repo`：托管运行仓库。
+- `~/plugins/pam-os-memory`：个人 plugin 源目录。
+- `~/.agents/plugins/marketplace.json`：个人 marketplace 入口。
+- `~/.codex/skills/pam-os-memory`：全局 skill fallback。
+- `~/.codex/config.toml`：`pam_os_memory` MCP server 注册。
+
+可用 MCP tools：
+
+- `prepare_context`
+- `capture_memory`
+- `record_behavior_choice`
+- `consolidate_memory`
+- `get_profile`
+- `search_memory`
+- `inspect_memory`
+- `get_storage_stats`
+
+重启 Codex 后，可以让 Codex 检查 skill 和 MCP server：
 
 ```text
 List available skills
@@ -330,39 +370,47 @@ List available skills
 Use $pam-os-memory. 继续做 PAM-OS，按我的历史偏好给下一步计划。
 ```
 
-Codex 直接使用 skill 即可。若要走 REST，把 skill 配置里的 `mode` 改成 `rest`，并确保 REST 服务已启动。
+如果 MCP 工具可用，skill 应该优先使用 MCP；如果 MCP 不可用，才读取 skill 的 `config.toml` 选择 REST 或 CLI fallback。
 
-#### Claude Code
+#### Claude Code、OpenCode、Hermes
 
-Claude Code 支持项目级 Skills。本仓库已经提供：
+统一安装器也支持其他客户端：
 
-```text
-.claude/skills/pam-os-memory/SKILL.md
+```powershell
+./scripts/install-plugin.sh --claude --yes
+./scripts/install-plugin.sh --opencode --yes
+./scripts/install-plugin.sh --hermes --yes
 ```
 
-进入项目根目录启动 Claude Code 后，可以问：
+默认写入：
+
+- Claude Code：`~/.claude/skills/pam-os-memory`
+- OpenCode：`~/.config/opencode/AGENTS.md`，并复用 Claude-compatible skill
+- Hermes：`~/.hermes/config.yaml` 和 `~/.hermes/AGENTS.md`
+
+安装后重启对应客户端。若只需要 skill，不需要 plugin/MCP 注册，可以使用 `scripts/install-skill.sh`。
+
+#### REST / CLI fallback
+
+当 MCP 不可用时，skill 会读取安装目录下的 `config.toml`：
 
 ```text
-List all available Skills
+Codex:      ~/.codex/skills/pam-os-memory/config.toml
+Claude:     ~/.claude/skills/pam-os-memory/config.toml
+CC Switch:  ~/.config/cc-switch/skills/pam-os-memory/config.toml
 ```
 
-如果 Claude Code 已经运行，修改或新增 Skill 后通常需要重启会话才能重新加载。
-
-如果你更偏向 REST 方式，可以把 skill 配置里的 `mode` 设成 `rest`，然后确保 PAM-OS REST 服务已启动。
+默认是 `mode = "cli"`。如果要走 REST，把 `mode` 改成 `rest`，并确保 PAM-OS REST 服务已启动。
 
 #### CC Switch
 
-如果你使用 CC Switch，可以把 PAM-OS 当作一组“Skills + REST API”配置导入。推荐配置方式：
+如果你使用 CC Switch，可以把 PAM-OS 当作 skill bundle 导入：
 
-1. 在 CC Switch 的目标应用中选择 Codex 或 Claude Code。
-2. 在 Skills 管理中添加本仓库的 skill 目录：
-   - Codex: `.agents/skills/pam-os-memory`
-   - Claude Code: `.claude/skills/pam-os-memory`
-3. 在 REST 配置中填写 PAM-OS 服务地址和认证信息。
-4. 同步或启用到对应客户端。
-5. 重启 Codex / Claude Code，并用“List available skills”检查加载结果。
+```powershell
+./scripts/install-skill.sh --cc-switch --yes
+```
 
-不同版本的 CC Switch UI 可能略有差异，但核心信息就是这三件事：Skill 目录、REST 地址、环境变量。
+默认 bundle 路径是 `~/.config/cc-switch/skills/pam-os-memory`。不同版本的 CC Switch UI 可能略有差异，但核心信息是 skill 目录、运行模式和数据库路径。
 
 #### 建议给模型的系统提示片段
 
@@ -832,12 +880,25 @@ PAM-OS 使用 SQLite。初始化时会创建这些表：
 | `profile_evidence` | 用户画像证据。 |
 | `profile_traits` | 稳定用户画像。 |
 | `behavior_events` | 用户行为选择事件。 |
+| `policy_signals` | 学习到的读/写/巩固/抑制记忆信号。 |
 
 默认数据库位于 `~/.pam-os/memory.sqlite3`，因此不同终端和不同项目会共用同一份本机记忆库。
 
 ## 12. 检索和抽取规则
 
-### 13.1 抽取
+### 12.1 Provider pipeline
+
+PAM-OS 的默认实现仍是本地规则版，但读写路径已经通过 provider 接口组织：
+
+- `MemoryPolicy`：判断当前任务是否应该读取或捕获记忆。
+- `MemoryExtractor`：从事件中抽取结构化记忆。
+- `MemoryRetriever`：检索候选记忆。
+- `MemoryReranker`：在预算前重新排序候选结果。
+- `ProfileConsolidator`：把记忆和行为证据提升为稳定画像。
+
+默认 provider 位于 `pam_os.rule_provider`，`AdaptiveMemoryPolicy` 会先检查 `policy_signals`，再回退到规则策略。
+
+### 12.2 抽取
 
 当前默认抽取器是 `RuleBasedExtractor`：
 
@@ -856,7 +917,7 @@ PAM-OS 使用 SQLite。初始化时会创建这些表：
 | 包含“今天、昨天、最近、刚刚”等 | `episodic` |
 | 其他 | `semantic` |
 
-### 13.2 检索
+### 12.3 检索
 
 检索优先使用 SQLite FTS5：
 
@@ -876,7 +937,7 @@ content LIKE ... OR tags_json LIKE ...
 - ASCII 单词。
 - 一些常见中文关键词，例如“偏好、项目、目标、风格、实现、本地、可控、长期、思源”等。
 
-### 13.3 `prepare` 重排和预算
+### 12.4 `prepare` 重排和预算
 
 `prepare` 会对候选记忆重新打分。因素包括：
 
@@ -890,7 +951,7 @@ content LIKE ... OR tags_json LIKE ...
 
 ## 13. 常见集成模式
 
-### 14.1 作为本地 AI 助手记忆层
+### 13.1 作为本地 AI 助手记忆层
 
 推荐循环：
 
@@ -904,7 +965,7 @@ content LIKE ... OR tags_json LIKE ...
   -> 周期性调用 consolidate_memory
 ```
 
-### 14.2 作为手动知识库
+### 13.2 作为手动知识库
 
 低层命令即可：
 
@@ -914,7 +975,7 @@ uv run --python 3.12 memory search "..."
 uv run --python 3.12 memory compile "..."
 ```
 
-### 14.3 作为长期用户画像系统
+### 13.3 作为长期用户画像系统
 
 重点使用：
 
@@ -949,7 +1010,7 @@ uv run --python 3.12 memory prepare --help
 
 ## 15. 常见问题
 
-### 16.1 `prepare` 没有返回上下文
+### 15.1 `prepare` 没有返回上下文
 
 `prepare` 会先判断任务是否需要记忆。普通问题可能只返回决策结果。例如：
 
@@ -963,7 +1024,7 @@ uv run --python 3.12 memory prepare "Python list 怎么排序？" --json
 uv run --python 3.12 memory prepare "Python list 怎么排序？" --force
 ```
 
-### 16.2 `capture` 没有写入
+### 15.2 `capture` 没有写入
 
 `capture` 会跳过短暂内容。例如“哈哈好的”通常不会保存。要强制保存：
 
@@ -971,7 +1032,7 @@ uv run --python 3.12 memory prepare "Python list 怎么排序？" --force
 uv run --python 3.12 memory capture "哈哈好的" --force
 ```
 
-### 16.3 搜索结果为空
+### 15.3 搜索结果为空
 
 可能原因：
 
@@ -1022,9 +1083,10 @@ CLI arguments > environment variables > config/pam-os.toml > built-in defaults
 
 - 抽取器是规则版，不调用 LLM。
 - 画像巩固也是规则版，主要覆盖偏好、回答风格、技术决策风格等有限模式。
+- policy signal 目前通过本地规则和显式学习 API 使用，LLM teacher 仍是后续扩展。
 - 检索是 SQLite FTS5 或 LIKE，不包含向量数据库。
 - `memory_links` 表已预留，但当前没有复杂图谱逻辑。
 - 上下文预算按字符裁剪，不是精确 token 预算。
-- 原始事件会保存；如需手动遗忘，可通过 REST `/memory/clear` 一次性清空全部记忆数据。
+- 原始事件会保存；如需手动遗忘，可通过 CLI `memory clear --confirm` 或 REST `/memory/clear` 一次性清空全部记忆数据。
 
 这些边界也是当前版本的设计取舍：先保持本地、轻量、可运行，后续可以在相同接口后面替换为 LLM 抽取器、向量检索或更复杂的画像巩固逻辑。
