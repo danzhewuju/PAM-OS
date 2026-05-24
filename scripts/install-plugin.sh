@@ -101,14 +101,31 @@ can_prompt() {
   [[ -r /dev/tty && -w /dev/tty ]] || [[ -t 0 && -t 1 ]]
 }
 
+is_windows_shell() {
+  case "$(uname -s 2>/dev/null || printf unknown)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_windows_pipe() {
+  is_windows_shell && [[ ! -t 0 ]]
+}
+
 read_user() {
   local __result_var="$1"
   local prompt="$2"
-  if [[ -r /dev/tty ]]; then
-    read -r -p "$prompt" "$__result_var" < /dev/tty
-  else
-    read -r -p "$prompt" "$__result_var"
+
+  printf -v "$__result_var" '%s' ''
+  if [[ -r /dev/tty && -w /dev/tty ]] && read -r -p "$prompt" "$__result_var" < /dev/tty; then
+    return 0
   fi
+
+  if [[ -t 0 ]] && read -r -p "$prompt" "$__result_var"; then
+    return 0
+  fi
+
+  return 1
 }
 
 confirm() {
@@ -128,7 +145,9 @@ confirm() {
   fi
 
   while true; do
-    read_user reply "$prompt $suffix "
+    if ! read_user reply "$prompt $suffix "; then
+      die "Interactive prompt requires a TTY. Re-run with --yes or explicit options."
+    fi
     reply="${reply:-$default}"
     case "$reply" in
       y|Y|yes|YES) return 0 ;;
@@ -140,6 +159,12 @@ confirm() {
 
 select_install_targets() {
   local selection item
+
+  if is_windows_pipe; then
+    INSTALL_CODEX=1
+    warn "Interactive target selection is unreliable with Windows pipe installs; using default target: codex. Pass --target to choose explicitly."
+    return 0
+  fi
 
   printf '\nInstall targets:\n'
   printf '  1) codex     - Codex plugin + MCP + global skill fallback\n'
@@ -1032,7 +1057,7 @@ done
 [[ -n "$DB_PATH" ]] || die "--db must not be empty."
 [[ -n "$PYTHON_VERSION" ]] || die "--python must not be empty."
 
-if [[ "$ASSUME_YES" == "0" && ! can_prompt ]]; then
+if [[ "$ASSUME_YES" == "0" && ! can_prompt && ! is_windows_pipe ]]; then
   die "Interactive install requires a TTY. Use --yes for non-interactive installs."
 fi
 

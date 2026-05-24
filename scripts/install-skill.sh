@@ -87,28 +87,49 @@ can_prompt() {
   [[ -r /dev/tty && -w /dev/tty ]] || [[ -t 0 && -t 1 ]]
 }
 
+is_windows_shell() {
+  case "$(uname -s 2>/dev/null || printf unknown)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_windows_pipe() {
+  is_windows_shell && [[ ! -t 0 ]]
+}
+
 read_user() {
   local __result_var="$1"
   local prompt="$2"
 
-  if [[ -r /dev/tty ]]; then
-    read -r -p "$prompt" "$__result_var" < /dev/tty
-  else
-    read -r -p "$prompt" "$__result_var"
+  printf -v "$__result_var" '%s' ''
+  if [[ -r /dev/tty && -w /dev/tty ]] && read -r -p "$prompt" "$__result_var" < /dev/tty; then
+    return 0
   fi
+
+  if [[ -t 0 ]] && read -r -p "$prompt" "$__result_var"; then
+    return 0
+  fi
+
+  return 1
 }
 
 read_secret_user() {
   local __result_var="$1"
   local prompt="$2"
 
-  if [[ -r /dev/tty ]]; then
-    read -r -s -p "$prompt" "$__result_var" < /dev/tty
+  printf -v "$__result_var" '%s' ''
+  if [[ -r /dev/tty && -w /dev/tty ]] && read -r -s -p "$prompt" "$__result_var" < /dev/tty; then
     printf '\n' > /dev/tty
-  else
-    read -r -s -p "$prompt" "$__result_var"
-    printf '\n' >&2
+    return 0
   fi
+
+  if [[ -t 0 ]] && read -r -s -p "$prompt" "$__result_var"; then
+    printf '\n' >&2
+    return 0
+  fi
+
+  return 1
 }
 
 confirm() {
@@ -128,7 +149,9 @@ confirm() {
   fi
 
   while true; do
-    read_user reply "$prompt $suffix "
+    if ! read_user reply "$prompt $suffix "; then
+      die "Interactive prompt requires a TTY. Re-run with --yes or explicit options."
+    fi
     reply="${reply:-$default}"
     case "$reply" in
       y|Y|yes|YES) return 0 ;;
@@ -148,7 +171,9 @@ prompt_value() {
     return 0
   fi
 
-  read_user reply "$prompt [$default]: "
+  if ! read_user reply "$prompt [$default]: "; then
+    die "Interactive prompt requires a TTY. Pass an explicit option or use --yes."
+  fi
   printf '%s' "${reply:-$default}"
 }
 
@@ -161,12 +186,20 @@ prompt_secret() {
     return 0
   fi
 
-  read_secret_user reply "$prompt (leave empty for none): "
+  if ! read_secret_user reply "$prompt (leave empty for none): "; then
+    die "Interactive prompt requires a TTY. Pass explicit REST options or use --yes."
+  fi
   printf '%s' "$reply"
 }
 
 select_install_targets() {
   local selection item
+
+  if is_windows_pipe; then
+    INSTALL_CODEX=1
+    warn "Interactive target selection is unreliable with Windows pipe installs; using default target: codex. Pass --target to choose explicitly."
+    return 0
+  fi
 
   printf '\nInstall targets:\n'
   printf '  1) codex      - Codex global skill (%s)\n' "$CODEX_DEFAULT_DIR"
@@ -325,7 +358,9 @@ prepare_dest() {
     printf '  2) skip this target\n'
     printf '  3) abort\n'
     local choice
-    read_user choice 'Selection [1]: '
+    if ! read_user choice 'Selection [1]: '; then
+      die "Existing install requires an interactive choice. Re-run with --yes to replace it."
+    fi
     choice="${choice:-1}"
     case "$choice" in
       1) ;;
@@ -645,7 +680,7 @@ if [[ -z "$DB_PATH" ]]; then
   die "--db must not be empty."
 fi
 
-if [[ "$ASSUME_YES" == "0" && ! can_prompt ]]; then
+if [[ "$ASSUME_YES" == "0" && ! can_prompt && ! is_windows_pipe ]]; then
   die "Interactive install requires a TTY. Use --yes with explicit options for non-interactive installs."
 fi
 
@@ -666,6 +701,9 @@ fi
 if [[ -z "$MODE_ARG" ]]; then
   if [[ "$ASSUME_YES" == "1" ]]; then
     INSTALL_MODE="cli"
+  elif is_windows_pipe; then
+    INSTALL_MODE="cli"
+    warn "Interactive runtime mode selection is unreliable with Windows pipe installs; using default mode: cli. Pass --mode to choose explicitly."
   else
     printf '\nRuntime mode:\n'
     printf '  1) cli  - no long-running server; model runs the local memory CLI\n'
