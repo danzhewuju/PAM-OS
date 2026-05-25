@@ -466,6 +466,7 @@ prepare_runtime_commands() {
       "init"
     )
     INIT_ENV=()
+    INIT_ENV_COUNT=0
     RUNTIME_LABEL="uv"
     return 0
   fi
@@ -482,6 +483,7 @@ PY
   INIT_COMMAND="$PYTHON_BIN"
   INIT_ARGS=("-m" "pam_os.cli" "--db" "$DB_PATH" "init")
   INIT_ENV=("PYTHONPATH=$repo_src")
+  INIT_ENV_COUNT=1
   RUNTIME_LABEL="system Python"
 }
 
@@ -551,8 +553,14 @@ run_cli_init() {
   fi
 
   info "Initializing PAM-OS memory database and warming selected runtime"
-  if env "${INIT_ENV[@]}" "$INIT_COMMAND" "${INIT_ARGS[@]}"; then
-    return 0
+  if [[ "$INIT_ENV_COUNT" -gt 0 ]]; then
+    if env "${INIT_ENV[@]}" "$INIT_COMMAND" "${INIT_ARGS[@]}"; then
+      return 0
+    fi
+  else
+    if "$INIT_COMMAND" "${INIT_ARGS[@]}"; then
+      return 0
+    fi
   fi
 
   warn "PAM-OS memory database init or runtime warmup failed."
@@ -926,6 +934,7 @@ MCP_ENV_JSON="{}"
 INIT_COMMAND=""
 INIT_ARGS=()
 INIT_ENV=()
+INIT_ENV_COUNT=0
 RUNTIME_LABEL=""
 
 while [[ $# -gt 0 ]]; do
