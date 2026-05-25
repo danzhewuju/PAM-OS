@@ -1,6 +1,6 @@
 ---
 name: pam-os-memory
-description: Use PAM-OS as the user's local long-term memory for Codex. Trigger when the user asks to continue prior work, refer to personal preferences, project history, previous decisions, long-term goals, answer style, or asks Codex to remember/capture stable information. Prefer PAM-OS MCP tools when available; use REST only when configured; use CLI only as a fallback.
+description: Use PAM-OS as the user's local long-term memory for Codex. Trigger when the user asks to continue prior work, refer to personal preferences, project history, previous decisions, long-term goals, answer style, or asks Codex to remember/capture stable information. Also use it after answering when the turn contains stable preferences, project decisions, workflow choices, corrections, or durable style guidance that should be remembered automatically. Prefer PAM-OS MCP tools when available; use REST only when configured; use CLI only as a fallback.
 ---
 
 # PAM-OS Memory
@@ -89,17 +89,20 @@ Do not read memory for generic one-off factual questions unless the user explici
 
 ## After Answering
 
-Capture stable information only:
+After each substantial user-facing task, quickly check whether the turn contains stable information worth keeping. If yes, call `capture_memory` with a concise normalized candidate rather than the raw conversation. Capture stable information only:
 
 - preferences: "I prefer self-hosted tools"
 - goals: "My goal is to build..."
 - project decisions: "We decided to use SQLite FTS5"
 - style guidance: "Answer more directly next time"
 - corrections: "That is not my preference"
+- workflow choices: "Use automatic memory capture unless information is ambiguous"
 
 Skip transient chat, secrets, credentials, medical/legal/financial sensitive details unless the user explicitly asks to store them.
 
 Use `force` only when the user explicitly asks to remember something and the automatic capture gate skips it.
+
+Prefer automatic maintenance over repeated appends: if a similar memory already exists, PAM-OS may reinforce or update it instead of creating a duplicate. For long sessions, send concise candidates such as "用户偏好：PAM-OS 记忆写入应更自动，减少确认打扰。" and let the runtime deduplicate.
 
 ## Safety
 

@@ -135,6 +135,49 @@ def test_capture_memory_skips_transient_content(tmp_path):
     assert captured.memories
 
 
+def test_capture_memory_reinforces_duplicate_memory(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    first = runtime.capture_memory("我偏好 PAM-OS 的记忆写入自动一点，减少确认打扰。")
+    second = runtime.capture_memory("我偏好 PAM-OS 的记忆写入自动一点，减少确认打扰。")
+    stats = runtime.get_storage_stats()
+
+    assert first.should_capture is True
+    assert first.created_count == 1
+    assert second.should_capture is True
+    assert second.created_count == 0
+    assert second.updated_count == 1
+    assert first.memories[0].id == second.memories[0].id
+    assert second.memories[0].confidence > first.memories[0].confidence
+    assert stats.tables["memories"]["count"] == 1
+
+
+def test_capture_memory_dedupes_similar_long_session_preferences(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    first = runtime.capture_memory("我偏好 PAM-OS 自动写入稳定偏好和项目决策。")
+    second = runtime.capture_memory("我偏好 PAM-OS 自动写入稳定偏好和项目决策，不要频繁询问确认。")
+    stats = runtime.get_storage_stats()
+
+    assert first.created_count == 1
+    assert second.created_count == 0
+    assert second.updated_count == 1
+    assert stats.tables["memories"]["count"] == 1
+    assert "不要频繁询问确认" in second.memories[0].content
+
+
+def test_capture_memory_still_creates_distinct_memory(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    runtime.capture_memory("我偏好 PAM-OS 自动写入稳定偏好和项目决策。")
+    distinct = runtime.capture_memory("我偏好直接、工程化、可执行的回答。")
+    stats = runtime.get_storage_stats()
+
+    assert distinct.created_count == 1
+    assert distinct.updated_count == 0
+    assert stats.tables["memories"]["count"] == 2
+
+
 def test_policy_provider_can_force_read_and_capture(tmp_path):
     runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3", policy=AlwaysReadPolicy())
 

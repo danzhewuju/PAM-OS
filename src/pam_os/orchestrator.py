@@ -5,7 +5,7 @@ from typing import Any
 
 from pam_os.config import OrchestratorConfig
 from pam_os.context import ContextCompiler
-from pam_os.models import CaptureResult, MemoryUseDecision, PreparedContext, SearchResult
+from pam_os.models import CaptureResult, Event, MemoryUseDecision, PreparedContext, SearchResult, new_id
 from pam_os.providers import MemoryPolicy, MemoryReranker, MemoryRetriever
 from pam_os.rule_provider import RuleMemoryPolicy, RuleMemoryReranker, StoreMemoryRetriever
 from pam_os.store import MemoryStore
@@ -91,14 +91,49 @@ class MemoryOrchestrator:
         decision = self.should_capture_memory(content, metadata)
         if not force and not decision.should_use:
             return CaptureResult(False, decision.reason)
+        capture_metadata = {**(metadata or {}), "capture_reason": decision.reason, "capture_signals": decision.signals}
+        if hasattr(remember_func, "__self__") and getattr(remember_func, "__self__", None) is not None:
+            runtime = remember_func.__self__
+            extractor = getattr(runtime, "extractor", None)
+            if extractor is not None:
+                event = Event(
+                    id=new_id("evt"),
+                    source=source,
+                    source_ref=source_ref,
+                    content=content.strip(),
+                    metadata=capture_metadata,
+                )
+                self.store.add_event(event)
+                candidates = extractor.extract(event.id, event.content, event.metadata)
+                memories, created_count, updated_count = self.store.upsert_deduped_memories(candidates)
+                reason = decision.reason
+                if updated_count and not created_count:
+                    reason = f"{reason}; reinforced existing memory"
+                elif updated_count:
+                    reason = f"{reason}; deduped {updated_count} existing memory item(s)"
+                return CaptureResult(
+                    True,
+                    reason,
+                    event=event,
+                    memories=memories,
+                    created_count=created_count,
+                    updated_count=updated_count,
+                )
+
         result = remember_func(
             content,
             source=source,
             source_ref=source_ref,
-            metadata={**(metadata or {}), "capture_reason": decision.reason, "capture_signals": decision.signals},
+            metadata=capture_metadata,
             extract=True,
         )
-        return CaptureResult(True, decision.reason, event=result["event"], memories=result["memories"])
+        return CaptureResult(
+            True,
+            decision.reason,
+            event=result["event"],
+            memories=result["memories"],
+            created_count=len(result["memories"]),
+        )
 
     def _query_for(self, task: str, conversation_summary: str | None) -> str:
         if conversation_summary:

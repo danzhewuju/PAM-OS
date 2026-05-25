@@ -75,6 +75,8 @@ class CaptureResult:
     reason: str
     event: Event | None = None
     memories: list[Memory] = field(default_factory=list)
+    created_count: int = 0
+    updated_count: int = 0
 
 
 @dataclass(frozen=True)

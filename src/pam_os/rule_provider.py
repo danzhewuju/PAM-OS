@@ -28,10 +28,10 @@ READ_SIGNALS = {
 }
 
 CAPTURE_SIGNALS = {
-    "preference": ["我偏好", "我喜欢", "我不喜欢", "我倾向", "更希望", "不要一开始"],
-    "goal": ["我的目标", "我希望", "下一步", "计划", "准备做"],
-    "project": ["项目", "决定", "当前项目", "当前阶段", "先用", "不引入"],
-    "style": ["回答风格", "以后回答", "直接", "工程化", "少营销"],
+    "preference": ["我偏好", "我喜欢", "我不喜欢", "我倾向", "更希望", "不要一开始", "自动一点", "不想要"],
+    "goal": ["我的目标", "我希望", "下一步", "计划", "准备做", "接下来要"],
+    "project": ["项目", "决定", "当前项目", "当前阶段", "先用", "不引入", "我们先", "保持这种", "这个方向"],
+    "style": ["回答风格", "以后回答", "以后就", "就这么", "直接", "工程化", "少营销", "别这么"],
 }
 
 GENERIC_QUESTION_MARKERS = ["怎么排序", "是什么", "解释一下", "语法", "报错", "天气", "新闻"]
@@ -73,7 +73,7 @@ class RuleMemoryPolicy:
             signals.append("explicit_memory")
 
         confidence = min(0.95, 0.2 + 0.18 * len(signals))
-        if any(marker in text for marker in ["决定", "偏好", "目标", "不引入", "先用"]):
+        if any(marker in text for marker in ["决定", "偏好", "目标", "不引入", "先用", "以后", "保持", "自动"]):
             confidence += 0.15
         confidence = min(confidence, 0.95)
 

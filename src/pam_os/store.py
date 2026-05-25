@@ -218,33 +218,128 @@ class MemoryStore:
     def add_memories(self, memories: list[Memory]) -> None:
         with self.connect() as conn:
             for memory in memories:
-                conn.execute(
-                    """
-                    INSERT INTO memories(
-                      id, event_id, type, content, importance, confidence, tags_json,
-                      valid_from, valid_to, created_at, updated_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        memory.id,
-                        memory.event_id,
-                        memory.type,
-                        memory.content,
-                        memory.importance,
-                        memory.confidence,
-                        json.dumps(memory.tags, ensure_ascii=False),
-                        memory.valid_from,
-                        memory.valid_to,
-                        memory.created_at,
-                        memory.updated_at,
-                    ),
-                )
-                if self.fts_available:
-                    conn.execute(
-                        "INSERT INTO memories_fts(id, content, tags) VALUES (?, ?, ?)",
-                        (memory.id, memory.content, " ".join(memory.tags)),
-                    )
+                self._insert_memory(conn, memory)
+
+    def upsert_deduped_memories(
+        self,
+        memories: list[Memory],
+        *,
+        similarity_threshold: float = 0.82,
+    ) -> tuple[list[Memory], int, int]:
+        if not memories:
+            return [], 0, 0
+
+        resolved: list[Memory] = []
+        created_count = 0
+        updated_count = 0
+        with self.connect() as conn:
+            for memory in memories:
+                existing = self._find_similar_memory(conn, memory, similarity_threshold=similarity_threshold)
+                if existing:
+                    updated = self._reinforce_memory(conn, existing, memory)
+                    resolved.append(updated)
+                    updated_count += 1
+                    continue
+
+                self._insert_memory(conn, memory)
+                resolved.append(memory)
+                created_count += 1
+        return resolved, created_count, updated_count
+
+    def _insert_memory(self, conn: sqlite3.Connection, memory: Memory) -> None:
+        conn.execute(
+            """
+            INSERT INTO memories(
+              id, event_id, type, content, importance, confidence, tags_json,
+              valid_from, valid_to, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                memory.id,
+                memory.event_id,
+                memory.type,
+                memory.content,
+                memory.importance,
+                memory.confidence,
+                json.dumps(memory.tags, ensure_ascii=False),
+                memory.valid_from,
+                memory.valid_to,
+                memory.created_at,
+                memory.updated_at,
+            ),
+        )
+        if self.fts_available:
+            conn.execute(
+                "INSERT INTO memories_fts(id, content, tags) VALUES (?, ?, ?)",
+                (memory.id, memory.content, " ".join(memory.tags)),
+            )
+
+    def _find_similar_memory(
+        self,
+        conn: sqlite3.Connection,
+        memory: Memory,
+        *,
+        similarity_threshold: float,
+    ) -> Memory | None:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM memories
+            WHERE type = ?
+            ORDER BY updated_at DESC
+            LIMIT 200
+            """,
+            (memory.type,),
+        ).fetchall()
+        best: tuple[float, Memory] | None = None
+        candidate_terms = _content_terms(memory.content)
+        for row in rows:
+            existing = self._row_to_memory(row)
+            existing_terms = _content_terms(existing.content)
+            score = _memory_similarity(candidate_terms, existing_terms)
+            if score >= similarity_threshold and (best is None or score > best[0]):
+                best = (score, existing)
+        return best[1] if best else None
+
+    def _reinforce_memory(self, conn: sqlite3.Connection, existing: Memory, candidate: Memory) -> Memory:
+        timestamp = now_iso()
+        tags = sorted({*existing.tags, *candidate.tags})
+        updated = Memory(
+            id=existing.id,
+            event_id=existing.event_id,
+            type=existing.type,
+            content=_prefer_more_specific(existing.content, candidate.content),
+            importance=min(0.98, max(existing.importance, candidate.importance) + 0.02),
+            confidence=min(0.98, max(existing.confidence, candidate.confidence) + 0.03),
+            tags=tags,
+            valid_from=existing.valid_from,
+            valid_to=existing.valid_to,
+            created_at=existing.created_at,
+            updated_at=timestamp,
+        )
+        conn.execute(
+            """
+            UPDATE memories
+            SET content = ?, importance = ?, confidence = ?, tags_json = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                updated.content,
+                updated.importance,
+                updated.confidence,
+                json.dumps(updated.tags, ensure_ascii=False),
+                updated.updated_at,
+                updated.id,
+            ),
+        )
+        if self.fts_available:
+            conn.execute("DELETE FROM memories_fts WHERE id = ?", (updated.id,))
+            conn.execute(
+                "INSERT INTO memories_fts(id, content, tags) VALUES (?, ?, ?)",
+                (updated.id, updated.content, " ".join(updated.tags)),
+            )
+        return updated
 
     @property
     def fts_available(self) -> bool:
@@ -1023,6 +1118,68 @@ def re_split_words(query: str) -> list[str]:
     import re
 
     return re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,}", query)
+
+
+def _content_terms(content: str) -> set[str]:
+    normalized = (
+        content.lower()
+        .replace("，", " ")
+        .replace("。", " ")
+        .replace("、", " ")
+        .replace("：", " ")
+        .replace("；", " ")
+        .replace("/", " ")
+    )
+    terms = {
+        token
+        for token in normalized.split()
+        if len(token) >= 2 and token not in {"用户", "偏好", "倾向", "上下文", "目标", "计划"}
+    }
+    terms.update(re_split_words(normalized))
+    for keyword in [
+        "自动",
+        "触发",
+        "写入",
+        "记忆",
+        "偏好",
+        "项目",
+        "决策",
+        "风格",
+        "确认",
+        "重复",
+        "合并",
+        "本地",
+        "可控",
+        "轻量",
+        "工程",
+    ]:
+        if keyword in content:
+            terms.add(keyword)
+    return terms or {normalized.strip()}
+
+
+def _jaccard(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def _memory_similarity(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    jaccard = _jaccard(left, right)
+    containment = len(left & right) / min(len(left), len(right))
+    if containment >= 0.8 and jaccard >= 0.45:
+        return containment
+    return jaccard
+
+
+def _prefer_more_specific(existing: str, candidate: str) -> str:
+    if existing == candidate:
+        return existing
+    if len(candidate) > len(existing) + 8 and _memory_similarity(_content_terms(existing), _content_terms(candidate)) >= 0.8:
+        return candidate
+    return existing
 
 
 def _policy_signal_status(confidence: float, support_count: int, reject_count: int) -> str:
