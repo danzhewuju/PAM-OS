@@ -108,6 +108,24 @@ def test_prepare_context_gates_generic_questions(tmp_path):
     assert prepared.package is None
 
 
+def test_task_work_phrasing_triggers_project_memory(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    examples = [
+        "pamr 帮我排查一下插件安装失败",
+        "帮我排查一下插件安装失败",
+        "帮我分析一下这个项目为什么不会触发 PAM",
+        "解决一下",
+        "优化一下这个项目",
+    ]
+
+    for example in examples:
+        decision = runtime.should_use_memory(example)
+
+        assert decision.should_use is True
+        assert "task_work_reference" in decision.signals
+
+
 def test_prepare_context_returns_budgeted_context(tmp_path):
     runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
     runtime.capture_memory(

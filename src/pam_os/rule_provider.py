@@ -25,6 +25,26 @@ READ_SIGNALS = {
     "project_reference": ["项目", "当前项目", "当前阶段", "project", "current project"],
     "preference_reference": ["喜欢", "不喜欢", "倾向", "符合我", "按我的", "不要", "希望"],
     "history_reference": ["之前说过", "历史", "决策", "背景", "上下文", "继续做"],
+    "task_work_reference": [
+        "pamr",
+        "帮我排查",
+        "排查一下",
+        "帮我分析",
+        "分析一下",
+        "解决一下",
+        "帮我解决",
+        "优化一下",
+        "帮我优化",
+        "修复一下",
+        "帮我修复",
+        "实现一下",
+        "帮我实现",
+        "这个项目",
+        "当前仓库",
+        "这个仓库",
+        "this repo",
+        "this project",
+    ],
 }
 
 CAPTURE_SIGNALS = {
@@ -55,6 +75,8 @@ class RuleMemoryPolicy:
         if "我" in text or "我的" in text:
             confidence += 0.1
         if "继续" in text or "之前" in text:
+            confidence += 0.12
+        if "task_work_reference" in signals:
             confidence += 0.12
         confidence = min(confidence, 0.95)
 

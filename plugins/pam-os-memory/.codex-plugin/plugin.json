@@ -1,7 +1,7 @@
 {
   "name": "pam-os-memory",
   "version": "0.1.0",
-  "description": "Use PAM-OS local-first long-term memory from Codex, including automatic post-answer capture of stable preferences and project decisions.",
+  "description": "Use PAM-OS local-first long-term memory from Codex, including context prep for project troubleshooting, analysis, solving, optimization, and automatic post-answer capture of stable preferences and project decisions.",
   "author": {
     "name": "PAM-OS"
   },
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "PAM-OS Memory",
     "shortDescription": "Local-first long-term memory for Codex.",
-    "longDescription": "PAM-OS provides local SQLite-backed memory through a Codex skill and MCP tools for preparing context, automatically maintaining stable memories after answers, recording behavior choices, and reading profile traits.",
+    "longDescription": "PAM-OS provides local SQLite-backed memory through a Codex skill and MCP tools for preparing context before project troubleshooting, analysis, solving, optimization, and implementation work, automatically maintaining stable memories after answers, recording behavior choices, and reading profile traits.",
     "developerName": "PAM-OS",
     "category": "Productivity",
     "capabilities": [
@@ -28,6 +28,7 @@
     ],
     "defaultPrompt": [
       "Use PAM-OS memory for this task.",
+      "Prepare PAM-OS context before troubleshooting or analyzing this project.",
       "Remember this project decision in PAM-OS.",
       "Automatically capture stable preferences from this turn.",
       "Prepare context from PAM-OS before answering."

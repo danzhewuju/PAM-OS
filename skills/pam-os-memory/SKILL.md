@@ -1,6 +1,6 @@
 ---
 name: pam-os-memory
-description: Use PAM-OS as the user's local long-term memory for Codex. Trigger when the user asks to continue prior work, refer to personal preferences, project history, previous decisions, long-term goals, answer style, or asks Codex to remember/capture stable information. Also use it after answering when the turn contains stable preferences, project decisions, workflow choices, corrections, or durable style guidance that should be remembered automatically. Prefer PAM-OS MCP tools when available; use REST only when configured; use CLI only as a fallback.
+description: Use PAM-OS as the user's local long-term memory for Codex. Trigger when the user asks to continue prior work, refer to personal preferences, project history, previous decisions, long-term goals, answer style, or asks Codex to remember/capture stable information. Also trigger before project work phrased as "help me troubleshoot/analyze/solve/optimize/fix/implement", including Chinese requests like "帮我排查", "帮我分析", "解决一下", and "优化一下这个项目", because those often depend on prior project context. Treat "pamr" as an explicit read shortcut and "pamw" as an explicit write shortcut that reviews the current user/AI conversation, extracts stable memory candidates, and writes those candidates to PAM-OS. Also use it after answering when the turn contains stable preferences, project decisions, workflow choices, corrections, or durable style guidance that should be remembered automatically. Prefer PAM-OS MCP tools when available; use REST only when configured; use CLI only as a fallback.
 ---
 
 # PAM-OS Memory
@@ -81,13 +81,17 @@ uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" consolidat
 
 Call `prepare_context` when the user asks about:
 
+- `pamr ...`, which is an explicit manual read shortcut. Call `prepare_context` with `force=true` and use the text after `pamr` as the task when present.
 - ongoing projects or "continue where we left off"
 - personal preferences, constraints, long-term goals, style, or prior decisions
 - "according to my preference", "remember what I said", or similar history-dependent phrasing
+- troubleshooting, analysis, solving, optimization, fixing, or implementation work in a known project or current repository, including requests like "帮我排查一下...", "帮我分析一下...", "解决一下", and "优化一下这个项目"
 
 Do not read memory for generic one-off factual questions unless the user explicitly requests memory.
 
 ## After Answering
+
+When the user writes `pamw`, treat it as an explicit manual write shortcut. Review the current user/AI conversation, extract concise stable memory candidates, and call `capture_memory` for those candidates. The text after `pamw` is only an optional extraction instruction, not the memory content to save verbatim. If no stable preference, project decision, goal, durable style guidance, correction, or workflow choice is present, say that nothing durable was found instead of writing transient chat.
 
 After each substantial user-facing task, quickly check whether the turn contains stable information worth keeping. If yes, call `capture_memory` with a concise normalized candidate rather than the raw conversation. Capture stable information only:
 
