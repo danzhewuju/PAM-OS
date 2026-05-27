@@ -1,0 +1,268 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 860" width="1280" height="860" role="img" aria-labelledby="title desc">
+  <title id="title">PAM-OS dual-loop memory architecture</title>
+  <desc id="desc">A clean dual-loop architecture diagram for PAM-OS. The read loop prepares prompt-ready context before an answer. The capture loop stores durable memory and learns policy signals after an answer.</desc>
+  <defs>
+    <filter id="softShadow" x="-12%" y="-16%" width="124%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#0f172a" flood-opacity="0.08" />
+    </filter>
+
+    <marker id="arrowRead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L9,4 L1,7" fill="none" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+    <marker id="arrowWrite" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L9,4 L1,7" fill="none" stroke="#059669" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+    <marker id="arrowLearn" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L9,4 L1,7" fill="none" stroke="#7c3aed" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+    <marker id="arrowControl" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M1,1 L9,4 L1,7" fill="none" stroke="#64748b" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+
+    <style>
+      text {
+        font-family: "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+        letter-spacing: 0;
+      }
+      .canvas { fill: #ffffff; }
+      .title { fill: #0f172a; font-size: 30px; font-weight: 760; }
+      .subtitle { fill: #64748b; font-size: 14px; }
+
+      .band { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1.4; }
+      .band-read { fill: #eff6ff; stroke: #bfdbfe; }
+      .band-write { fill: #f0fdf4; stroke: #bbf7d0; }
+      .band-learn { fill: #faf5ff; stroke: #ddd6fe; }
+      .band-title { fill: #1e293b; font-size: 14px; font-weight: 740; }
+      .band-sub { fill: #64748b; font-size: 11.5px; }
+
+      .node { stroke-width: 1.45; filter: url(#softShadow); }
+      .entry { fill: #ffffff; stroke: #cbd5e1; }
+      .adapter { fill: #eff6ff; stroke: #93c5fd; }
+      .runtime { fill: #f8fbff; stroke: #8fb5e9; }
+      .policy { fill: #fff7ed; stroke: #fdba74; }
+      .provider { fill: #f0fdf4; stroke: #86efac; }
+      .compiler { fill: #fdf2f8; stroke: #f0abfc; }
+      .store { fill: #f8fafc; stroke: #a8b6c8; }
+      .learn { fill: #faf5ff; stroke: #c4b5fd; }
+
+      .node-title { fill: #111827; font-size: 14.5px; font-weight: 720; }
+      .node-sub { fill: #64748b; font-size: 11.2px; }
+      .small-title { fill: #111827; font-size: 13px; font-weight: 720; }
+      .small-sub { fill: #64748b; font-size: 10.5px; }
+
+      .flow { fill: none; stroke-width: 2.1; stroke-linecap: round; stroke-linejoin: round; }
+      .read { stroke: #2563eb; marker-end: url(#arrowRead); }
+      .write { stroke: #059669; stroke-dasharray: 7 5; marker-end: url(#arrowWrite); }
+      .learn-flow { stroke: #7c3aed; marker-end: url(#arrowLearn); }
+      .control { stroke: #64748b; stroke-dasharray: 5 4; marker-end: url(#arrowControl); }
+      .read-line { stroke: #2563eb; marker-end: none; }
+      .write-line { stroke: #059669; stroke-dasharray: 7 5; marker-end: none; }
+      .learn-line { stroke: #7c3aed; marker-end: none; }
+      .control-line { stroke: #64748b; stroke-dasharray: 5 4; marker-end: none; }
+      .line-label { fill: #334155; font-size: 10.5px; font-weight: 650; }
+      .label-bg { fill: #ffffff; opacity: 0.9; }
+
+      .legend { fill: #ffffff; stroke: #e2e8f0; stroke-width: 1.2; }
+      .legend-text { fill: #475569; font-size: 11.5px; font-weight: 650; }
+    </style>
+  </defs>
+
+  <rect class="canvas" x="0" y="0" width="1280" height="860" />
+
+  <text class="title" x="50" y="58">PAM-OS Dual-Loop Memory Architecture</text>
+  <text class="subtitle" x="52" y="86">Read before the answer, capture after the answer, and learn policy signals that make future memory use more precise.</text>
+
+  <rect class="band band-read" x="42" y="126" width="1196" height="246" rx="14" />
+  <text class="band-title" x="66" y="156">Read / Prepare Loop</text>
+  <text class="band-sub" x="66" y="175">Task-dependent context is retrieved, ranked, budgeted, and compiled before the assistant responds.</text>
+
+  <rect class="band band-write" x="42" y="430" width="1196" height="248" rx="14" />
+  <text class="band-title" x="66" y="460">Capture / Consolidate Loop</text>
+  <text class="band-sub" x="66" y="479">Stable preferences, goals, project decisions, style guidance, and behavior choices become durable local memory.</text>
+
+  <rect class="band band-learn" x="42" y="706" width="1196" height="92" rx="14" />
+  <text class="band-title" x="66" y="736">Learning Feedback</text>
+  <text class="band-sub" x="66" y="755">Policy signals and profile traits feed the next read/capture decision without requiring an external service.</text>
+
+  <!-- Entry and adapter column -->
+  <rect class="node entry" x="72" y="218" width="122" height="70" rx="8" />
+  <text class="node-title" x="102" y="247">Agent Task</text>
+  <text class="node-sub" x="94" y="268">before answer</text>
+
+  <rect class="node entry" x="72" y="526" width="122" height="70" rx="8" />
+  <text class="node-title" x="95" y="555">Conversation</text>
+  <text class="node-sub" x="98" y="576">after answer</text>
+
+  <rect class="node adapter" x="244" y="184" width="124" height="52" rx="8" />
+  <text class="small-title" x="288" y="207">MCP</text>
+  <text class="small-sub" x="270" y="224">tool calls</text>
+
+  <rect class="node adapter" x="244" y="246" width="124" height="52" rx="8" />
+  <text class="small-title" x="289" y="269">CLI</text>
+  <text class="small-sub" x="263" y="286">memory command</text>
+
+  <rect class="node adapter" x="244" y="308" width="124" height="52" rx="8" />
+  <text class="small-title" x="286" y="331">REST</text>
+  <text class="small-sub" x="270" y="348">FastAPI</text>
+
+  <rect class="node adapter" x="244" y="514" width="124" height="52" rx="8" />
+  <text class="small-title" x="288" y="537">MCP</text>
+  <text class="small-sub" x="263" y="554">capture tool</text>
+
+  <rect class="node adapter" x="244" y="576" width="124" height="52" rx="8" />
+  <text class="small-title" x="283" y="599">CLI / REST</text>
+  <text class="small-sub" x="261" y="616">fallback paths</text>
+
+  <!-- Runtime column -->
+  <rect class="node runtime" x="424" y="208" width="146" height="82" rx="8" />
+  <text class="node-title" x="440" y="238">Runtime API</text>
+  <text class="node-sub" x="445" y="259">prepare_context</text>
+  <text class="node-sub" x="445" y="276">should_use_memory</text>
+
+  <rect class="node runtime" x="424" y="518" width="146" height="82" rx="8" />
+  <text class="node-title" x="440" y="548">Runtime API</text>
+  <text class="node-sub" x="445" y="569">capture_memory</text>
+  <text class="node-sub" x="445" y="586">behavior_choice</text>
+
+  <rect class="node runtime" x="620" y="214" width="150" height="76" rx="8" />
+  <text class="node-title" x="641" y="244">Orchestrator</text>
+  <text class="node-sub" x="644" y="265">query + budgets</text>
+
+  <rect class="node runtime" x="620" y="522" width="150" height="76" rx="8" />
+  <text class="node-title" x="641" y="552">Orchestrator</text>
+  <text class="node-sub" x="646" y="573">capture flow</text>
+
+  <!-- Policy and provider column -->
+  <rect class="node policy" x="820" y="188" width="142" height="82" rx="8" />
+  <text class="node-title" x="839" y="218">Adaptive Policy</text>
+  <text class="node-sub" x="844" y="239">learned signals</text>
+  <text class="node-sub" x="844" y="256">rule fallback</text>
+
+  <rect class="node provider" x="820" y="284" width="142" height="72" rx="8" />
+  <text class="node-title" x="841" y="313">Retriever</text>
+  <text class="node-sub" x="842" y="334">FTS5 / LIKE</text>
+
+  <rect class="node provider" x="820" y="494" width="142" height="72" rx="8" />
+  <text class="node-title" x="843" y="523">Extractor</text>
+  <text class="node-sub" x="842" y="544">typed memories</text>
+
+  <rect class="node provider" x="820" y="582" width="142" height="72" rx="8" />
+  <text class="node-title" x="836" y="611">Consolidator</text>
+  <text class="node-sub" x="842" y="632">traits + evidence</text>
+
+  <!-- Store and output column -->
+  <rect class="node store" x="1014" y="166" width="170" height="96" rx="8" />
+  <text class="node-title" x="1040" y="196">Policy Signals</text>
+  <text class="node-sub" x="1034" y="217">feature:* / regex</text>
+  <text class="node-sub" x="1034" y="234">confidence, status</text>
+
+  <rect class="node store" x="1014" y="296" width="170" height="112" rx="8" />
+  <text class="node-title" x="1042" y="326">Memory Store</text>
+  <text class="node-sub" x="1034" y="349">events</text>
+  <text class="node-sub" x="1034" y="367">memories + FTS5</text>
+  <text class="node-sub" x="1034" y="385">memory_links</text>
+
+  <rect class="node compiler" x="1014" y="448" width="170" height="82" rx="8" />
+  <text class="node-title" x="1034" y="478">Context Package</text>
+  <text class="node-sub" x="1036" y="499">prompt-ready</text>
+  <text class="node-sub" x="1036" y="516">saved history</text>
+
+  <rect class="node store" x="1014" y="560" width="170" height="108" rx="8" />
+  <text class="node-title" x="1037" y="590">Profile Layers</text>
+  <text class="node-sub" x="1034" y="613">behavior_events</text>
+  <text class="node-sub" x="1034" y="631">profile_evidence</text>
+  <text class="node-sub" x="1034" y="649">profile_traits</text>
+
+  <rect class="node learn" x="424" y="724" width="184" height="52" rx="8" />
+  <text class="small-title" x="454" y="747">Policy Learner</text>
+  <text class="small-sub" x="452" y="764">learn_signal_from_text</text>
+
+  <rect class="node learn" x="676" y="724" width="184" height="52" rx="8" />
+  <text class="small-title" x="717" y="747">Local Profile</text>
+  <text class="small-sub" x="704" y="764">stable user context</text>
+
+  <!-- Read loop arrows: straight, top band only -->
+  <path class="flow read" d="M194 253 H230" />
+  <path class="flow read-line" d="M230 210 V334" />
+  <path class="flow read-line" d="M230 210 H244" />
+  <path class="flow read-line" d="M230 272 H244" />
+  <path class="flow read-line" d="M230 334 H244" />
+  <path class="flow read-line" d="M368 210 H396" />
+  <path class="flow read-line" d="M368 272 H396" />
+  <path class="flow read-line" d="M368 334 H396" />
+  <path class="flow read-line" d="M396 210 V334" />
+  <path class="flow read" d="M396 249 H424" />
+  <path class="flow read" d="M570 249 H620" />
+  <path class="flow read" d="M770 252 H820" />
+  <path class="flow control" d="M1014 214 H982 V229 H962" />
+  <rect class="label-bg" x="970" y="200" width="78" height="18" rx="4" />
+  <text class="line-label" x="978" y="213">read signals</text>
+  <path class="flow read" d="M891 270 V284" />
+  <path class="flow read" d="M962 320 H1014" />
+  <rect class="label-bg" x="973" y="306" width="30" height="18" rx="4" />
+  <text class="line-label" x="976" y="319">query</text>
+  <path class="flow read" d="M1099 408 V448" />
+  <rect class="label-bg" x="1112" y="423" width="41" height="18" rx="4" />
+  <text class="line-label" x="1117" y="436">compile</text>
+  <path class="flow read-line" d="M1099 448 V430 H982 V356" />
+  <path class="flow read" d="M982 356 H962" />
+  <rect class="label-bg" x="968" y="397" width="65" height="18" rx="4" />
+  <text class="line-label" x="976" y="410">rerank</text>
+  <path class="flow read-line" d="M1014 489 H788 V290" />
+  <path class="flow read" d="M788 290 H770" />
+  <rect class="label-bg" x="842" y="474" width="67" height="18" rx="4" />
+  <text class="line-label" x="850" y="487">return ctx</text>
+
+  <!-- Capture loop arrows: straight, lower band only -->
+  <path class="flow write" d="M194 561 H230" />
+  <path class="flow write-line" d="M230 540 V602" />
+  <path class="flow write-line" d="M230 540 H244" />
+  <path class="flow write-line" d="M230 602 H244" />
+  <path class="flow write-line" d="M368 540 H396" />
+  <path class="flow write-line" d="M368 602 H396" />
+  <path class="flow write-line" d="M396 540 V602" />
+  <path class="flow write" d="M396 559 H424" />
+  <path class="flow write" d="M570 559 H620" />
+  <path class="flow write" d="M770 559 H820" />
+  <path class="flow write-line" d="M962 530 H990 V352" />
+  <path class="flow write" d="M990 352 H1014" />
+  <rect class="label-bg" x="974" y="438" width="35" height="18" rx="4" />
+  <text class="line-label" x="980" y="451">store</text>
+  <path class="flow write-line" d="M1099 560 V546" />
+  <path class="flow write" d="M1099 546 V530" />
+  <path class="flow write" d="M962 618 H1014" />
+  <rect class="label-bg" x="970" y="603" width="37" height="18" rx="4" />
+  <text class="line-label" x="976" y="616">traits</text>
+
+  <!-- Short feedback arrows only -->
+  <path class="flow learn-line" d="M516 724 V690 H792 V618" />
+  <path class="flow learn-flow" d="M792 618 H820" />
+  <rect class="label-bg" x="614" y="675" width="76" height="18" rx="4" />
+  <text class="line-label" x="622" y="688">policy update</text>
+
+  <path class="flow learn-line" d="M860 750 H1099 V690" />
+  <path class="flow learn-flow" d="M1099 690 V668" />
+  <rect class="label-bg" x="930" y="735" width="73" height="18" rx="4" />
+  <text class="line-label" x="938" y="748">profile feed</text>
+
+  <path class="flow learn-line" d="M1099 166 V138 H891" />
+  <path class="flow learn-flow" d="M891 138 V188" />
+  <rect class="label-bg" x="982" y="123" width="77" height="18" rx="4" />
+  <text class="line-label" x="990" y="136">next decision</text>
+
+  <path class="flow control-line" d="M1014 614 H940 V372" />
+  <path class="flow control" d="M940 372 H962" />
+  <rect class="label-bg" x="944" y="544" width="52" height="18" rx="4" />
+  <text class="line-label" x="951" y="557">profile</text>
+
+  <!-- Legend -->
+  <rect class="legend" x="878" y="724" width="310" height="52" rx="8" />
+  <path class="flow read" d="M898 742 H936" />
+  <text class="legend-text" x="946" y="746">read / prepare</text>
+  <path class="flow write" d="M1042 742 H1080" />
+  <text class="legend-text" x="1090" y="746">capture</text>
+  <path class="flow learn-flow" d="M898 762 H936" />
+  <text class="legend-text" x="946" y="766">learning feedback</text>
+
+  <text class="subtitle" x="52" y="834">Core modules: runtime.py, orchestrator.py, adaptive_policy.py, rule_provider.py, context.py, store.py, mcp.py, cli.py, api.py</text>
+</svg>
