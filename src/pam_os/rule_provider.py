@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -21,10 +22,76 @@ from pam_os.store import MemoryStore
 
 
 READ_SIGNALS = {
-    "personal_reference": ["我", "我的", "偏好", "风格", "目标", "长期", "之前", "上次", "继续", "记得"],
-    "project_reference": ["项目", "当前项目", "当前阶段", "project", "current project"],
-    "preference_reference": ["喜欢", "不喜欢", "倾向", "符合我", "按我的", "不要", "希望"],
-    "history_reference": ["之前说过", "历史", "决策", "背景", "上下文", "继续做"],
+    "personal_reference": [
+        "我",
+        "我的",
+        "偏好",
+        "风格",
+        "目标",
+        "长期",
+        "之前",
+        "上次",
+        "继续",
+        "记得",
+        "my",
+        "mine",
+        "my preference",
+        "my preferences",
+        "my style",
+        "my goal",
+        "long-term",
+        "previously",
+        "last time",
+        "continue",
+        "remember",
+    ],
+    "project_reference": [
+        "项目",
+        "当前项目",
+        "当前阶段",
+        "project",
+        "current project",
+        "repo",
+        "repository",
+        "current repo",
+        "this repo",
+        "this project",
+        "codebase",
+        "current codebase",
+    ],
+    "preference_reference": [
+        "喜欢",
+        "不喜欢",
+        "倾向",
+        "符合我",
+        "按我的",
+        "不要",
+        "希望",
+        "prefer",
+        "preference",
+        "preferred",
+        "usual style",
+        "according to my",
+        "as I like",
+        "do not want",
+        "don't want",
+    ],
+    "history_reference": [
+        "之前说过",
+        "历史",
+        "决策",
+        "背景",
+        "上下文",
+        "继续做",
+        "as we discussed",
+        "as mentioned before",
+        "previous decision",
+        "context",
+        "background",
+        "continue where we left off",
+        "pick up where we left off",
+        "where we left off",
+    ],
     "task_work_reference": [
         "pamr",
         "帮我排查",
@@ -44,14 +111,119 @@ READ_SIGNALS = {
         "这个仓库",
         "this repo",
         "this project",
+        "troubleshoot",
+        "troubleshooting",
+        "debug",
+        "debugging",
+        "analyze",
+        "analyzing",
+        "analyse",
+        "analysing",
+        "solve",
+        "solving",
+        "fix",
+        "fixing",
+        "optimize",
+        "optimizing",
+        "optimise",
+        "optimising",
+        "implement",
+        "implementing",
+        "help me troubleshoot",
+        "help me debug",
+        "help me analyze",
+        "help me analyse",
+        "help me solve",
+        "help me fix",
+        "help me optimize",
+        "help me optimise",
+        "help me implement",
     ],
 }
 
 CAPTURE_SIGNALS = {
-    "preference": ["我偏好", "我喜欢", "我不喜欢", "我倾向", "更希望", "不要一开始", "自动一点", "不想要"],
-    "goal": ["我的目标", "我希望", "下一步", "计划", "准备做", "接下来要"],
-    "project": ["项目", "决定", "当前项目", "当前阶段", "先用", "不引入", "我们先", "保持这种", "这个方向"],
-    "style": ["回答风格", "以后回答", "以后就", "就这么", "直接", "工程化", "少营销", "别这么"],
+    "preference": [
+        "我偏好",
+        "我喜欢",
+        "我不喜欢",
+        "我倾向",
+        "更希望",
+        "不要一开始",
+        "自动一点",
+        "不想要",
+        "i prefer",
+        "i like",
+        "i don't like",
+        "i do not like",
+        "i tend to",
+        "i'd rather",
+        "i would rather",
+        "i don't want",
+        "i do not want",
+        "i want you to remember",
+        "remember that",
+    ],
+    "goal": [
+        "我的目标",
+        "我希望",
+        "下一步",
+        "计划",
+        "准备做",
+        "接下来要",
+        "my goal",
+        "i plan to",
+        "my plan is",
+        "next step",
+        "next i will",
+        "i'm going to",
+        "i am going to",
+    ],
+    "project": [
+        "项目",
+        "决定",
+        "当前项目",
+        "当前阶段",
+        "先用",
+        "不引入",
+        "我们先",
+        "保持这种",
+        "这个方向",
+        "we decided",
+        "i decided",
+        "decision",
+        "we will use",
+        "we should use",
+        "i will use",
+        "i should use",
+        "don't introduce",
+        "do not introduce",
+        "not introduce",
+        "keep this direction",
+        "current phase",
+    ],
+    "style": [
+        "回答风格",
+        "以后回答",
+        "以后就",
+        "就这么",
+        "直接",
+        "工程化",
+        "少营销",
+        "别这么",
+        "answer style",
+        "next time",
+        "in the future",
+        "from now on",
+        "keep doing this",
+        "be direct",
+        "more direct",
+        "engineering-focused",
+        "engineering focused",
+        "less marketing",
+        "don't start with",
+        "do not start with",
+        "default to",
+    ],
 }
 
 GENERIC_QUESTION_MARKERS = ["怎么排序", "是什么", "解释一下", "语法", "报错", "天气", "新闻"]
@@ -72,9 +244,20 @@ class RuleMemoryPolicy:
             return MemoryUseDecision(False, "generic factual or one-off question", 0.75, generic_hits)
 
         confidence = min(0.95, 0.25 + 0.18 * len(signals))
-        if "我" in text or "我的" in text:
+        normalized = text.lower()
+        if any(_contains_marker(normalized, marker) for marker in ["我", "我的", "my", "mine"]):
             confidence += 0.1
-        if "继续" in text or "之前" in text:
+        if any(
+            _contains_marker(normalized, marker)
+            for marker in [
+                "继续",
+                "之前",
+                "continue",
+                "previously",
+                "last time",
+                "where we left off",
+            ]
+        ):
             confidence += 0.12
         if "task_work_reference" in signals:
             confidence += 0.12
@@ -95,7 +278,30 @@ class RuleMemoryPolicy:
             signals.append("explicit_memory")
 
         confidence = min(0.95, 0.2 + 0.18 * len(signals))
-        if any(marker in text for marker in ["决定", "偏好", "目标", "不引入", "先用", "以后", "保持", "自动"]):
+        normalized = text.lower()
+        if any(
+            _contains_marker(normalized, marker)
+            for marker in [
+                "决定",
+                "偏好",
+                "目标",
+                "不引入",
+                "先用",
+                "以后",
+                "保持",
+                "自动",
+                "decided",
+                "decision",
+                "prefer",
+                "goal",
+                "do not introduce",
+                "don't introduce",
+                "first",
+                "future",
+                "keep",
+                "default",
+            ]
+        ):
             confidence += 0.15
         confidence = min(confidence, 0.95)
 
@@ -333,10 +539,22 @@ class RuleProfileConsolidator:
 
 def _matched_signals(text: str, signal_map: dict[str, list[str]]) -> list[str]:
     signals: list[str] = []
+    normalized = text.lower()
     for signal, markers in signal_map.items():
-        if any(marker.lower() in text.lower() for marker in markers):
+        if any(_contains_marker(normalized, marker) for marker in markers):
             signals.append(signal)
     return signals
+
+
+def _contains_marker(normalized_text: str, marker: str) -> bool:
+    normalized_marker = marker.lower()
+    if _is_ascii_marker(normalized_marker):
+        return re.search(rf"(?<![A-Za-z0-9_]){re.escape(normalized_marker)}(?![A-Za-z0-9_])", normalized_text) is not None
+    return normalized_marker in normalized_text
+
+
+def _is_ascii_marker(marker: str) -> bool:
+    return bool(re.search(r"[a-z0-9]", marker)) and marker.isascii()
 
 
 def _normalize_relevance(raw_score: float) -> float:

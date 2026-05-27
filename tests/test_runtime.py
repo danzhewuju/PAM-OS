@@ -123,7 +123,33 @@ def test_task_work_phrasing_triggers_project_memory(tmp_path):
         decision = runtime.should_use_memory(example)
 
         assert decision.should_use is True
-        assert "task_work_reference" in decision.signals
+        assert set(decision.signals) & {"task_work_reference", "task_work_intent"}
+
+
+def test_english_phrasing_triggers_project_memory(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    examples = [
+        ("help me debug this repo", "task_work_intent"),
+        ("continue where we left off", "history_reference"),
+        ("use my usual style for this project", "preference_reference"),
+        ("as we discussed, optimize the current codebase", "continuity_reference"),
+    ]
+
+    for example, expected_signal in examples:
+        decision = runtime.should_use_memory(example)
+
+        assert decision.should_use is True
+        assert expected_signal in decision.signals
+
+
+def test_english_read_markers_use_word_boundaries(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    decision = runtime.should_use_memory("mypy prefix issue")
+
+    assert decision.should_use is False
+    assert decision.signals == []
 
 
 def test_prepare_context_returns_budgeted_context(tmp_path):
@@ -151,6 +177,31 @@ def test_capture_memory_skips_transient_content(tmp_path):
     assert skipped.should_capture is False
     assert captured.should_capture is True
     assert captured.memories
+
+
+def test_english_capture_phrasing_stores_stable_memory(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    examples = [
+        "I prefer self-hosted tools with local control.",
+        "We decided to use SQLite first and not introduce Qdrant.",
+        "Next time, default to two options before recommending one.",
+    ]
+
+    for example in examples:
+        captured = runtime.capture_memory(example)
+
+        assert captured.should_capture is True
+        assert captured.memories
+
+
+def test_english_capture_skips_plain_questions(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory("I want to know how Python syntax works.")
+
+    assert captured.should_capture is False
+    assert captured.memories == []
 
 
 def test_capture_memory_reinforces_duplicate_memory(tmp_path):
@@ -238,6 +289,54 @@ def test_adaptive_policy_learns_read_signal(tmp_path):
     assert after.decision.reason == "learned policy signal matched"
     assert after.package is not None
     assert "Aurora" in after.package.content
+
+
+def test_adaptive_feature_prior_handles_general_continuation(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    decision = runtime.should_use_memory("Pick up where we left off in the current codebase.")
+
+    assert decision.should_use is True
+    assert decision.reason == "adaptive feature signals indicate memory-dependent task"
+    assert "continuity_reference" in decision.signals
+    assert "project_context_reference" in decision.signals
+
+
+def test_adaptive_policy_learns_read_feature_signal_from_feedback(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    before = runtime.should_use_memory("same one please")
+    signal = runtime.learn_policy_signal_from_text(
+        signal_type="read",
+        text="same one please",
+        normalized_intent="short_followup_continuation",
+        action="use_memory",
+        confidence=0.7,
+    )
+    after = runtime.should_use_memory("that one please")
+
+    assert before.should_use is False
+    assert signal.pattern == "feature:short_followup"
+    assert after.should_use is True
+    assert after.reason == "learned policy signal matched"
+    assert "learned:short_followup_continuation" in after.signals
+
+
+def test_policy_signal_raw_patterns_match_literal_text(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+    runtime.learn_policy_signal(
+        signal_type="read",
+        pattern="C++ mode",
+        normalized_intent="cpp_context",
+        action="use_memory",
+        confidence=0.7,
+    )
+
+    decision = runtime.should_use_memory("C++ mode")
+    unrelated = runtime.should_use_memory("C mode")
+
+    assert decision.should_use is True
+    assert unrelated.should_use is False
 
 
 def test_adaptive_policy_learns_capture_signal(tmp_path):

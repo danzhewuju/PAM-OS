@@ -204,6 +204,29 @@ class PersonalMemoryRuntime:
             source=source,
         )
 
+    def learn_policy_signal_from_text(
+        self,
+        *,
+        signal_type: str,
+        text: str,
+        normalized_intent: str,
+        action: str,
+        scope: str = "general",
+        confidence: float = 0.66,
+        source: str = "user_feedback",
+        metadata: dict[str, Any] | None = None,
+    ):
+        return self.policy_learner.learn_from_text(
+            signal_type=signal_type,
+            text=text,
+            normalized_intent=normalized_intent,
+            action=action,
+            scope=scope,
+            confidence=confidence,
+            source=source,
+            metadata=metadata,
+        )
+
     def reinforce_policy_signal(
         self,
         *,

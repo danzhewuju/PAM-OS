@@ -140,7 +140,7 @@ Task/Event
   -> ProfileConsolidator
 ```
 
-The default runtime is still local and deterministic. `AdaptiveMemoryPolicy` checks learned policy signals first, then falls back to the rule policy. This lets PAM-OS learn expressions such as "continue that thread", "use the same style as before", or "remember this for next time" from prior interactions while keeping an offline baseline.
+The default runtime is still local and deterministic. `AdaptiveMemoryPolicy` extracts semantic policy features, checks learned policy signals, scores the feature-level decision, then falls back to the rule policy. This lets PAM-OS learn expressions such as "continue that thread", "use the same style as before", or "remember this for next time" from prior interactions while keeping an offline baseline.
 
 Provider interfaces live in `pam_os.providers`:
 
@@ -159,7 +159,7 @@ Policy memory is memory about how to use memory. It is stored in SQLite as `poli
 ```text
 signal_type       read / capture / consolidate / suppress
 scope             project / style / workflow / technical / general
-pattern           literal text or regex:...
+pattern           literal text, regex:..., or feature:<feature_name>
 normalized_intent stable meaning of the pattern
 action            use_memory / capture_memory / skip / consolidate
 confidence        current belief strength
@@ -183,6 +183,21 @@ runtime.learn_policy_signal(
 ```
 
 After that, a request containing "沿着 Aurora 那条线" can trigger memory retrieval even if it does not match the seed keyword rules. Signals can also be reinforced or rejected over time:
+
+Runtime code can also learn from an observed phrase by storing a reusable feature-level signal when one is available:
+
+```python
+runtime.learn_policy_signal_from_text(
+    signal_type="read",
+    text="same one please",
+    normalized_intent="short_followup_continuation",
+    action="use_memory",
+    scope="workflow",
+    confidence=0.70,
+)
+```
+
+That can store `feature:short_followup`, so later variants such as "that one please" can trigger the same learned behavior without memorizing every wording.
 
 ```python
 runtime.reinforce_policy_signal(

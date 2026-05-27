@@ -1,6 +1,6 @@
 ---
 name: pam-os-memory
-description: Use PAM-OS as the user's local long-term memory for Codex. Trigger when the user asks to continue prior work, refer to personal preferences, project history, previous decisions, long-term goals, answer style, or asks Codex to remember/capture stable information. Also trigger before project work phrased as "help me troubleshoot/analyze/solve/optimize/fix/implement", including Chinese requests like "帮我排查", "帮我分析", "解决一下", and "优化一下这个项目", because those often depend on prior project context. Treat "pamr" as an explicit read shortcut and "pamw" as an explicit write shortcut that reviews the current user/AI conversation, extracts stable memory candidates, and writes those candidates to PAM-OS. Also use it after answering when the turn contains stable preferences, project decisions, workflow choices, corrections, or durable style guidance that should be remembered automatically. Prefer PAM-OS MCP tools when available; use REST only when configured; use CLI only as a fallback.
+description: Use PAM-OS as the user's local long-term memory for Codex. Trigger when the user asks to continue prior work, refer to personal preferences, project history, previous decisions, long-term goals, answer style, or asks Codex to remember/capture stable information. Also trigger before project work phrased as "help me troubleshoot/debug/analyze/solve/optimize/fix/implement", including Chinese requests like "帮我排查", "帮我分析", "解决一下", and "优化一下这个项目", because those often depend on prior project context. Treat "pamr" as an explicit read shortcut and "pamw" as an explicit write shortcut that reviews the current user/AI conversation, extracts stable memory candidates, and writes those candidates to PAM-OS. Also use it after answering when the turn contains stable preferences, project decisions, workflow choices, corrections, or durable style guidance that should be remembered automatically. Prefer PAM-OS MCP tools when available; use REST only when configured; use CLI only as a fallback.
 ---
 
 # PAM-OS Memory
@@ -84,8 +84,8 @@ Call `prepare_context` when the user asks about:
 - `pamr ...`, which is an explicit manual read shortcut. Call `prepare_context` with `force=true` and use the text after `pamr` as the task when present.
 - ongoing projects or "continue where we left off"
 - personal preferences, constraints, long-term goals, style, or prior decisions
-- "according to my preference", "remember what I said", or similar history-dependent phrasing
-- troubleshooting, analysis, solving, optimization, fixing, or implementation work in a known project or current repository, including requests like "帮我排查一下...", "帮我分析一下...", "解决一下", and "优化一下这个项目"
+- "according to my preference", "use my usual style", "remember what I said", "as we discussed", "as mentioned before", "pick up where we left off", or similar history-dependent phrasing
+- troubleshooting, debugging, analysis, solving, optimization, fixing, or implementation work in a known project or current repository, including requests like "help me debug this repo", "help me analyze this project", "fix the current codebase", "帮我排查一下...", "帮我分析一下...", "解决一下", and "优化一下这个项目"
 
 Do not read memory for generic one-off factual questions unless the user explicitly requests memory.
 
@@ -97,10 +97,10 @@ After each substantial user-facing task, quickly check whether the turn contains
 
 - preferences: "I prefer self-hosted tools"
 - goals: "My goal is to build..."
-- project decisions: "We decided to use SQLite FTS5"
-- style guidance: "Answer more directly next time"
-- corrections: "That is not my preference"
-- workflow choices: "Use automatic memory capture unless information is ambiguous"
+- project decisions: "We decided to use SQLite FTS5", "Do not introduce Qdrant yet"
+- style guidance: "Answer more directly next time", "Default to two options before recommending one"
+- corrections: "That is not my preference", "I do not want that approach"
+- workflow choices: "Use automatic memory capture unless information is ambiguous", "Keep doing this for future debugging tasks"
 
 Skip transient chat, secrets, credentials, medical/legal/financial sensitive details unless the user explicitly asks to store them.
 
