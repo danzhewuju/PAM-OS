@@ -42,13 +42,13 @@ Requirements:
 - `uv` recommended for local execution
 - SQLite with FTS5 when available
 
-Initialize the runtime from a checkout:
+### Plugin + MCP (Suggest)
+
+Use this for Codex, Claude Code, OpenCode, or Hermes integration. The installer maintains a managed PAM-OS checkout at `~/.local/share/pam-os/repo`, installs the selected client integration, and points MCP-capable clients at the same checkout so plugin, skill, and runtime versions stay aligned.
 
 ```bash
-uv run --python 3.12 memory init
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-plugin.sh | bash
 ```
-
-PAM-OS supports two integration packages.
 
 ### Skill-only
 
@@ -56,57 +56,6 @@ Use this when your client supports Skills or project instructions, but does not 
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-skill.sh | bash
-```
-
-### Plugin + MCP
-
-Use this for Codex, Claude Code, OpenCode, or Hermes integration. The installer maintains a managed PAM-OS checkout at `~/.local/share/pam-os/repo`, installs the selected client integration, and points MCP-capable clients at the same checkout so plugin, skill, and runtime versions stay aligned.
-
-```bash
-./scripts/install-plugin.sh
-```
-
-The plugin installer writes:
-
-- `~/.local/share/pam-os/repo`, refreshed from the configured Git ref by default
-- Codex: `~/plugins/pam-os-memory`, `~/.agents/plugins/marketplace.json`, `~/.codex/skills/pam-os-memory`, and `~/.codex/config.toml`
-- Claude Code: `~/.claude/skills/pam-os-memory`
-- OpenCode: `~/.config/opencode/AGENTS.md` plus the Claude-compatible skill
-- Hermes: `~/.hermes/config.yaml` and `~/.hermes/AGENTS.md`
-
-For local development, pass `--repo-dir /path/to/PAM-OS` or `--source /path/to/plugins/pam-os-memory`. For non-interactive Codex installs, run `./scripts/install-plugin.sh --codex --yes`. Restart the selected client after installation. The skill policy decides when to capture memory; it records stable preferences, project decisions, goals, and corrections, not every chat turn.
-
-## Quick Start
-
-Initialize the local memory database:
-
-```bash
-uv run --python 3.12 memory init
-```
-
-Capture a stable project decision:
-
-```bash
-uv run --python 3.12 memory capture "I decided PAM-OS v0.1 should use SQLite FTS5 before adding a vector database." --force
-```
-
-Prepare context for a new task:
-
-```bash
-uv run --python 3.12 memory prepare "Continue PAM-OS and suggest the next implementation step."
-```
-
-Search stored memories:
-
-```bash
-uv run --python 3.12 memory search "PAM-OS SQLite FTS5"
-```
-
-Inspect storage:
-
-```bash
-uv run --python 3.12 memory stats
-uv run --python 3.12 memory inspect --limit 10
 ```
 
 ## Core Concepts
