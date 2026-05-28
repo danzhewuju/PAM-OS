@@ -95,7 +95,8 @@ class RuleBasedExtractor:
 
     def _extract_identity_name(self, content: str) -> str | None:
         patterns = [
-            r"(?:我是|我叫|我的名字是|我的姓名是)\s*([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_\-·]{1,31})",
+            r"(?:我是|我叫|用户叫|用户姓名是|我的名字是|我的姓名是)\s*([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_\-·]{1,31})",
+            r"用户身份信息[:：]\s*(?:用户姓名是|用户叫)?\s*([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_\-·]{1,31})",
             r"\bmy name is\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
             r"\bi am called\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
             r"\bi'm called\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",

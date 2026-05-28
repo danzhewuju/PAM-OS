@@ -35,6 +35,7 @@ class PamOsMcpServer:
             "search_memory": self._search_memory,
             "inspect_memory": self._inspect_memory,
             "get_storage_stats": self._get_storage_stats,
+            "clear_memory": self._clear_memory,
         }
 
     def handle_message(self, message: dict[str, Any]) -> dict[str, Any] | None:
@@ -159,6 +160,11 @@ class PamOsMcpServer:
         if arguments:
             raise JsonRpcError(-32602, "get_storage_stats does not accept arguments")
         return self.runtime.get_storage_stats()
+
+    def _clear_memory(self, arguments: dict[str, Any]) -> Any:
+        if arguments.get("confirm") is not True:
+            raise JsonRpcError(-32602, "clear_memory requires confirm=true")
+        return self.runtime.clear_memory()
 
     def _error_response(
         self,
@@ -298,6 +304,16 @@ def tool_definitions() -> list[dict[str, Any]]:
             "name": "get_storage_stats",
             "description": "Return PAM-OS storage statistics.",
             "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+        },
+        {
+            "name": "clear_memory",
+            "description": "Clear all PAM-OS memory data. Requires confirm=true.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"confirm": {"type": "boolean"}},
+                "required": ["confirm"],
+                "additionalProperties": False,
+            },
         },
     ]
 

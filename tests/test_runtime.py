@@ -206,6 +206,38 @@ def test_identity_statement_without_preference_is_captured(tmp_path):
     assert captured.memories[0].content == "用户姓名是余豪"
 
 
+def test_user_identity_statement_is_captured_as_identity(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory("用户叫余豪。")
+
+    assert captured.should_capture is True
+    assert [memory.type for memory in captured.memories] == ["identity"]
+    assert captured.memories[0].content == "用户姓名是余豪"
+
+
+def test_identity_questions_recall_legacy_semantic_name_memory(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+    runtime.remember(
+        """
+        {
+          "type": "semantic",
+          "content": "用户叫余豪。",
+          "importance": 0.62,
+          "confidence": 0.62,
+          "tags": ["semantic"]
+        }
+        """
+    )
+
+    prepared = runtime.prepare_context("我是谁？")
+
+    assert prepared.decision.should_use is True
+    assert prepared.package is not None
+    assert "用户叫余豪" in prepared.package.content
+    assert prepared.package.memory_ids
+
+
 def test_english_capture_phrasing_stores_stable_memory(tmp_path):
     runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
 

@@ -867,7 +867,8 @@ class MemoryStore:
             ]
             if keyword in query
         ]
-        result = tokens + ascii_tokens + cjk_keywords
+        identity_terms = _identity_query_terms(query)
+        result = tokens + ascii_tokens + cjk_keywords + identity_terms
         return [
             term for index, term in enumerate(result) if term and term not in result[:index]
         ][: self.retrieval_config.max_query_terms]
@@ -1118,6 +1119,31 @@ def re_split_words(query: str) -> list[str]:
     import re
 
     return re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,}", query)
+
+
+def _identity_query_terms(query: str) -> list[str]:
+    normalized = query.lower()
+    cjk_markers = [
+        "我是谁",
+        "你知道我是谁",
+        "我的名字",
+        "我叫什么",
+        "我叫啥",
+        "姓名",
+        "名字",
+        "身份",
+    ]
+    english_markers = [
+        "who am i",
+        "who i am",
+        "my name",
+        "what am i called",
+        "what is my name",
+        "identity",
+    ]
+    if not any(marker in query for marker in cjk_markers) and not any(marker in normalized for marker in english_markers):
+        return []
+    return ["用户叫", "用户姓名", "用户身份", "姓名", "名字", "identity"]
 
 
 def _content_terms(content: str) -> set[str]:

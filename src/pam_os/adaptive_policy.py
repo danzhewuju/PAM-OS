@@ -124,6 +124,9 @@ class TextPolicyFeatureExtractor:
                 "identity_statement": [
                     "我是",
                     "我叫",
+                    "用户叫",
+                    "用户姓名是",
+                    "用户身份信息",
                     "我的名字是",
                     "我的姓名是",
                     r"\bmy name is\b",
