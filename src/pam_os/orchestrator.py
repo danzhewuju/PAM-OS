@@ -19,6 +19,7 @@ class ContextBudget:
 
     def limit_for(self, memory_type: str) -> int:
         limits = self.per_type_limits or {
+            "identity": 2,
             "preference": 4,
             "project": 4,
             "goal": 3,

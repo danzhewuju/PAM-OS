@@ -121,6 +121,15 @@ class TextPolicyFeatureExtractor:
                     r"\bremember that\b",
                     r"\bi want you to remember\b",
                 ],
+                "identity_statement": [
+                    "我是",
+                    "我叫",
+                    "我的名字是",
+                    "我的姓名是",
+                    r"\bmy name is\b",
+                    r"\bi am called\b",
+                    r"\bi'm called\b",
+                ],
                 "preference_statement": [
                     "我偏好",
                     "我喜欢",
@@ -324,6 +333,7 @@ class AdaptiveMemoryPolicy:
 
         weights = {
             "explicit_memory_intent": 0.65,
+            "identity_statement": 0.38,
             "preference_statement": 0.32,
             "goal_statement": 0.28,
             "decision_statement": 0.34,
@@ -481,6 +491,7 @@ def _best_feature_pattern(signal_type: str, features: PolicyFeatures) -> str | N
             "future_instruction",
             "decision_statement",
             "correction_statement",
+            "identity_statement",
             "preference_statement",
             "goal_statement",
             "style_instruction",

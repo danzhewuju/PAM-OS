@@ -7,7 +7,7 @@ from pam_os.adaptive_policy import AdaptiveMemoryPolicy, PolicySignalLearner
 from pam_os.config import AppConfig, default_db_path, load_config
 from pam_os.context import ContextCompiler
 from pam_os.extractor import RuleBasedExtractor
-from pam_os.models import BehaviorEvent, ContextPackage, Event, Memory, SearchResult, StorageStats, new_id
+from pam_os.models import BehaviorEvent, CaptureResult, ContextPackage, Event, Memory, SearchResult, StorageStats, new_id
 from pam_os.orchestrator import ContextBudget, MemoryOrchestrator
 from pam_os.providers import MemoryExtractor, MemoryPolicy, MemoryReranker, MemoryRetriever, ProfileConsolidator
 from pam_os.rule_provider import RuleProfileConsolidator
@@ -144,7 +144,7 @@ class PersonalMemoryRuntime:
         metadata: dict[str, Any] | None = None,
         force: bool = False,
     ):
-        return self.orchestrator.capture_memory(
+        result = self.orchestrator.capture_memory(
             content,
             remember_func=self.remember,
             source=source,
@@ -152,6 +152,17 @@ class PersonalMemoryRuntime:
             metadata=metadata,
             force=force,
         )
+        self._maybe_auto_consolidate_after_capture(result)
+        return result
+
+    def _maybe_auto_consolidate_after_capture(self, result: CaptureResult) -> None:
+        config = self.config.consolidation
+        if not config.auto_consolidate or not result.should_capture:
+            return
+        threshold = max(1, config.auto_consolidate_min_memories)
+        unconsolidated = self.store.recent_unconsolidated_memories(limit=threshold)
+        if len(unconsolidated) >= threshold:
+            self.consolidate_memory(recent=config.recent_limit)
 
     def record_behavior_choice(
         self,

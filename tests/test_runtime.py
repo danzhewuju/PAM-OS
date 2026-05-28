@@ -4,7 +4,7 @@ import json
 
 from pam_os.api import create_app
 from pam_os.cli import main
-from pam_os.config import load_config
+from pam_os.config import AppConfig, ConsolidationConfig, load_config
 from pam_os.models import ConsolidationResult, MemoryUseDecision, SearchResult
 from pam_os.runtime import PersonalMemoryRuntime
 
@@ -177,6 +177,33 @@ def test_capture_memory_skips_transient_content(tmp_path):
     assert skipped.should_capture is False
     assert captured.should_capture is True
     assert captured.memories
+
+
+def test_capture_identity_and_preference_sentence_splits_memories(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory("我是余豪，我喜欢本地优先的工具。")
+
+    assert captured.should_capture is True
+    assert {memory.type for memory in captured.memories} == {"identity", "preference"}
+    assert any("用户姓名是余豪" in memory.content for memory in captured.memories)
+    assert any("我喜欢本地优先的工具" in memory.content for memory in captured.memories)
+
+    runtime.consolidate_memory(recent=100)
+    trait_keys = {trait.trait_key for trait in runtime.get_user_profile()}
+
+    assert "profile.identity.name" in trait_keys
+    assert "general.preference" in trait_keys
+
+
+def test_identity_statement_without_preference_is_captured(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory("我叫余豪")
+
+    assert captured.should_capture is True
+    assert [memory.type for memory in captured.memories] == ["identity"]
+    assert captured.memories[0].content == "用户姓名是余豪"
 
 
 def test_english_capture_phrasing_stores_stable_memory(tmp_path):
@@ -420,6 +447,46 @@ def test_consolidator_provider_can_be_injected(tmp_path):
 
     assert consolidator.calls == 1
     assert result.memories_scanned == 7
+
+
+def test_capture_auto_consolidates_after_threshold(tmp_path):
+    config = AppConfig(
+        consolidation=ConsolidationConfig(
+            auto_consolidate=True,
+            auto_consolidate_min_memories=2,
+        )
+    )
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3", config=config)
+
+    runtime.capture_memory(
+        """
+        [
+          {"type": "preference", "content": "用户偏好 self-host 和本地可控系统。"},
+          {"type": "style", "content": "用户偏好直接、工程化、可执行的回答。"}
+        ]
+        """,
+        force=True,
+    )
+
+    traits = runtime.get_user_profile()
+    trait_keys = {trait.trait_key for trait in traits}
+
+    assert "general.preference" in trait_keys
+    assert "communication.answer_style" in trait_keys
+
+
+def test_goal_and_project_memories_consolidate_into_profile_traits(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    runtime.capture_memory("我计划让 PAM-OS 随着交流自动生成长期特征。", force=True)
+    runtime.capture_memory("PAM-OS 项目正在实现本地优先的画像记忆系统。", force=True)
+
+    result = runtime.consolidate_memory(recent=100)
+    trait_keys = {trait.trait_key for trait in runtime.get_user_profile()}
+
+    assert result.evidence_created
+    assert "long_term.goal" in trait_keys
+    assert "project.active_context" in trait_keys
 
 
 def test_behavior_choice_consolidates_into_profile_trait(tmp_path):

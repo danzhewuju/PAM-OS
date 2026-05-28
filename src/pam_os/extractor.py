@@ -7,7 +7,7 @@ from typing import Any, Protocol
 from pam_os.models import Memory, new_id, now_iso
 
 
-MEMORY_TYPES = {"semantic", "episodic", "preference", "goal", "project", "style"}
+MEMORY_TYPES = {"semantic", "episodic", "identity", "preference", "goal", "project", "style"}
 
 
 class Extractor(Protocol):
@@ -27,25 +27,11 @@ class RuleBasedExtractor:
         if explicit:
             return explicit
 
-        memory_type = self._infer_type(content)
-        tags = self._infer_tags(content, memory_type)
-        importance = self._infer_importance(content, memory_type)
-        confidence = 0.72 if memory_type in {"preference", "goal", "project", "style"} else 0.62
-        timestamp = now_iso()
+        memories = self._extract_rule_based(event_id, content)
+        if memories:
+            return memories
 
-        return [
-            Memory(
-                id=new_id("mem"),
-                event_id=event_id,
-                type=memory_type,
-                content=self._normalize_content(content, memory_type),
-                importance=importance,
-                confidence=confidence,
-                tags=tags,
-                created_at=timestamp,
-                updated_at=timestamp,
-            )
-        ]
+        return [self._memory_from_content(event_id, content, self._infer_type(content))]
 
     def _extract_explicit_json(self, event_id: str, content: str) -> list[Memory]:
         payload = self._parse_json_payload(content)
@@ -74,6 +60,72 @@ class RuleBasedExtractor:
                 )
             )
         return memories
+
+    def _extract_rule_based(self, event_id: str, content: str) -> list[Memory]:
+        memories: list[Memory] = []
+        identity = self._extract_identity_name(content)
+        if identity:
+            memories.append(self._memory_from_content(event_id, f"用户姓名是{identity}", "identity"))
+        else:
+            memory_type = self._infer_type(content)
+            if memory_type in {"preference", "goal", "project", "style"}:
+                memories.append(self._memory_from_content(event_id, content, memory_type))
+                return self._dedupe_memories(memories)
+
+        for clause in self._stable_clauses(content):
+            memory_type = self._infer_type(clause)
+            if memory_type in {"preference", "goal", "project", "style"}:
+                memories.append(self._memory_from_content(event_id, clause, memory_type))
+
+        return self._dedupe_memories(memories)
+
+    def _memory_from_content(self, event_id: str, content: str, memory_type: str) -> Memory:
+        timestamp = now_iso()
+        return Memory(
+            id=new_id("mem"),
+            event_id=event_id,
+            type=memory_type,
+            content=self._normalize_content(content, memory_type),
+            importance=self._infer_importance(content, memory_type),
+            confidence=0.72 if memory_type in {"identity", "preference", "goal", "project", "style"} else 0.62,
+            tags=self._infer_tags(content, memory_type),
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
+
+    def _extract_identity_name(self, content: str) -> str | None:
+        patterns = [
+            r"(?:我是|我叫|我的名字是|我的姓名是)\s*([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_\-·]{1,31})",
+            r"\bmy name is\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
+            r"\bi am called\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
+            r"\bi'm called\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, content, flags=re.IGNORECASE)
+            if match:
+                candidate = match.group(1).strip()
+                if self._looks_like_identity_name(candidate):
+                    return candidate
+        return None
+
+    def _looks_like_identity_name(self, candidate: str) -> bool:
+        if re.fullmatch(r"[\u4e00-\u9fff]{2,8}", candidate):
+            return not candidate.startswith(("一个", "一名", "个", "名"))
+        return re.fullmatch(r"[A-Za-z][A-Za-z0-9_\-]{1,31}", candidate) is not None
+
+    def _stable_clauses(self, content: str) -> list[str]:
+        return [clause.strip() for clause in re.split(r"[，,。；;！!？?\n]+", content) if clause.strip()]
+
+    def _dedupe_memories(self, memories: list[Memory]) -> list[Memory]:
+        seen: set[tuple[str, str]] = set()
+        deduped: list[Memory] = []
+        for memory in memories:
+            key = (memory.type, " ".join(memory.content.lower().split()))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(memory)
+        return deduped
 
     def _parse_json_payload(self, content: str) -> Any | None:
         text = content.strip()
@@ -126,6 +178,7 @@ class RuleBasedExtractor:
 
     def _infer_importance(self, content: str, memory_type: str) -> float:
         base = {
+            "identity": 0.9,
             "preference": 0.82,
             "goal": 0.78,
             "project": 0.8,
@@ -139,6 +192,8 @@ class RuleBasedExtractor:
 
     def _normalize_content(self, content: str, memory_type: str) -> str:
         stripped = " ".join(content.strip().split())
+        if memory_type == "identity" and not stripped.startswith("用户"):
+            return f"用户身份信息：{stripped}"
         if memory_type == "preference" and not stripped.startswith("用户"):
             return f"用户偏好/倾向：{stripped}"
         if memory_type == "project" and not stripped.startswith("用户"):

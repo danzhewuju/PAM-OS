@@ -31,6 +31,8 @@ class ContextConfig:
 @dataclass(frozen=True)
 class ConsolidationConfig:
     recent_limit: int = 100
+    auto_consolidate: bool = True
+    auto_consolidate_min_memories: int = 5
     stability_increment: float = 0.12
     max_confidence: float = 0.98
     max_stability: float = 0.98

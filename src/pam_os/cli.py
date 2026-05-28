@@ -158,7 +158,7 @@ def build_parser() -> argparse.ArgumentParser:
     search = subparsers.add_parser("search", help="Search memories")
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=10)
-    search.add_argument("--type", action="append", choices=["semantic", "episodic", "preference", "goal", "project", "style"])
+    search.add_argument("--type", action="append", choices=["semantic", "episodic", "identity", "preference", "goal", "project", "style"])
 
     should_use = subparsers.add_parser("should-use", help="Decide whether a task should use memory")
     should_use.add_argument("task")

@@ -36,6 +36,10 @@ profile_limit = 8
 # Number of recent memories and behavior events scanned by one consolidation run.
 recent_limit = 100
 
+# Automatically promote accumulated stable memories into profile traits after capture.
+auto_consolidate = true
+auto_consolidate_min_memories = 5
+
 # How much trait stability increases for each additional supporting evidence item.
 stability_increment = 0.12
 

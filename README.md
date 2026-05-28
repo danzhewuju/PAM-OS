@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master
 | Context package  | Prompt-ready text compiled for a specific task.                                    |
 
 
-Memory types include `preference`, `goal`, `project`, `style`, `episodic`, and `semantic`.
+Memory types include `identity`, `preference`, `goal`, `project`, `style`, `episodic`, and `semantic`.
 
 ## Memory Architecture
 

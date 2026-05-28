@@ -206,6 +206,7 @@ export PAM_OS_CONFIG="/path/to/pam-os.toml"
 
 | 类型 | 含义 |
 | --- | --- |
+| `identity` | 用户明确声明的身份信息，例如姓名。 |
 | `preference` | 用户偏好、倾向、喜欢或不喜欢。 |
 | `goal` | 用户目标、计划、下一步。 |
 | `project` | 项目上下文、技术决策、MVP 信息。 |
@@ -416,7 +417,7 @@ uv run --python 3.12 memory add '
 ]'
 ```
 
-支持的 `type` 值：`semantic`、`episodic`、`preference`、`goal`、`project`、`style`。
+支持的 `type` 值：`semantic`、`episodic`、`identity`、`preference`、`goal`、`project`、`style`。
 
 ## 11. 数据存储
 

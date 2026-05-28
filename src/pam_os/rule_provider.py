@@ -142,6 +142,15 @@ READ_SIGNALS = {
 }
 
 CAPTURE_SIGNALS = {
+    "identity": [
+        "我是",
+        "我叫",
+        "我的名字是",
+        "我的姓名是",
+        "my name is",
+        "i am called",
+        "i'm called",
+    ],
     "preference": [
         "我偏好",
         "我喜欢",
@@ -284,6 +293,9 @@ class RuleMemoryPolicy:
             for marker in [
                 "决定",
                 "偏好",
+                "喜欢",
+                "名字",
+                "我叫",
                 "目标",
                 "不引入",
                 "先用",
@@ -340,7 +352,7 @@ class RuleMemoryReranker:
             memory = result.memory
             relevance = _normalize_relevance(result.score)
             recency = _recency_score(memory.updated_at, now)
-            stability = 0.85 if memory.type in {"preference", "goal", "project", "style"} else 0.45
+            stability = 0.85 if memory.type in {"identity", "preference", "goal", "project", "style"} else 0.45
             score = (
                 relevance * 0.45
                 + memory.importance * 0.25
@@ -413,6 +425,17 @@ class RuleProfileConsolidator:
     def _candidate_from_memory(self, memory: Memory) -> TraitCandidate | None:
         text = memory.content
         tags = set(memory.tags)
+        if memory.type == "identity":
+            return TraitCandidate(
+                trait_type="identity",
+                trait_key="profile.identity.name",
+                statement=self._clean_statement(text),
+                scope="profile",
+                evidence_type="explicit_statement",
+                evidence_content=text,
+                confidence=memory.confidence,
+            )
+
         if memory.type == "preference":
             return TraitCandidate(
                 trait_type="preference",
@@ -430,6 +453,28 @@ class RuleProfileConsolidator:
                 trait_key="communication.answer_style",
                 statement=self._clean_statement(text),
                 scope="communication",
+                evidence_type="explicit_statement",
+                evidence_content=text,
+                confidence=memory.confidence,
+            )
+
+        if memory.type == "goal":
+            return TraitCandidate(
+                trait_type="goal",
+                trait_key="long_term.goal",
+                statement=self._clean_statement(text),
+                scope="goals",
+                evidence_type="explicit_statement",
+                evidence_content=text,
+                confidence=memory.confidence,
+            )
+
+        if memory.type == "project":
+            return TraitCandidate(
+                trait_type="project",
+                trait_key="project.active_context",
+                statement=self._clean_statement(text),
+                scope="project",
                 evidence_type="explicit_statement",
                 evidence_content=text,
                 confidence=memory.confidence,
@@ -516,7 +561,10 @@ class RuleProfileConsolidator:
         )
 
     def _clean_statement(self, text: str) -> str:
-        return text.removeprefix("用户偏好/倾向：").strip()
+        statement = text.strip()
+        for prefix in ["用户身份信息：", "用户偏好/倾向：", "用户目标/计划：", "用户项目上下文："]:
+            statement = statement.removeprefix(prefix)
+        return statement.strip()
 
     def _behavior_evidence_text(self, event: BehaviorEvent) -> str:
         parts = [f"上下文：{event.context}"]

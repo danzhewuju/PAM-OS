@@ -7,6 +7,7 @@ from pam_os.models import ProfileTrait
 
 
 SECTION_TITLES = {
+    "identity": "Identity",
     "preference": "Long-term Preferences",
     "project": "Active Projects",
     "goal": "Current Goals",
@@ -40,7 +41,7 @@ class ContextCompiler:
                     f"(stability={trait.stability:.2f}, confidence={trait.confidence:.2f}, evidence={trait.evidence_count})"
                 )
             lines.append("")
-        for memory_type in ["preference", "project", "goal", "style", "episodic", "semantic"]:
+        for memory_type in ["identity", "preference", "project", "goal", "style", "episodic", "semantic"]:
             entries = grouped.get(memory_type, [])
             if not entries:
                 continue
