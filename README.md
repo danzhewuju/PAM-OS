@@ -18,7 +18,7 @@ Task/Event
   -> Context Package
 ```
 
-[PAM-OS memory architecture](docs/diagrams/memory-architecture.svg)
+![PAM-OS memory architecture](docs/diagrams/memory-architecture.svg)
 
 ## Why PAM-OS?
 
@@ -41,6 +41,10 @@ Requirements:
 - Python 3.11 or newer
 - `uv` recommended for local execution
 - SQLite with FTS5 when available
+
+## Use demo
+
+![image](./docs/diagrams/pam-os.gif)
 
 ### Plugin + MCP (Suggest)
 
