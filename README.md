@@ -393,3 +393,6 @@ PAM-OS is intentionally small today. The current runtime is the executable found
 - [Usage guide](docs/usage.md)
 - [Skill and plugin guide](docs/pam-os-skill-usage.md)
 - [Profile memory design](docs/design/people-understanding-profile-memory.md)
+
+## Link
+![认可linux.do](https://ld.xh.do/ld-badge.svg)
