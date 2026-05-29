@@ -13,6 +13,7 @@ from pam_os.models import (
     Memory,
     PolicySignal,
     ProfileEvidence,
+    QualityTrace,
     ProfileTrait,
     SearchResult,
     StorageStats,
@@ -64,6 +65,15 @@ INSPECT_TABLES = {
         "order_by": "updated_at DESC",
         "json_columns": {},
         "text_columns": ["id", "signal_type", "scope", "pattern", "normalized_intent", "action", "source", "status"],
+    },
+    "quality_traces": {
+        "order_by": "created_at DESC",
+        "json_columns": {
+            "signals_json": "signals",
+            "related_ids_json": "related_ids",
+            "metrics_json": "metrics",
+        },
+        "text_columns": ["id", "trace_id", "operation", "stage", "input_summary", "provider", "decision", "error"],
     },
 }
 
@@ -185,6 +195,25 @@ class MemoryStore:
                   updated_at TEXT NOT NULL,
                   UNIQUE(signal_type, pattern, action)
                 );
+
+                CREATE TABLE IF NOT EXISTS quality_traces (
+                  id TEXT PRIMARY KEY,
+                  trace_id TEXT NOT NULL,
+                  operation TEXT NOT NULL,
+                  stage TEXT NOT NULL,
+                  input_summary TEXT NOT NULL,
+                  provider TEXT NOT NULL,
+                  decision TEXT NOT NULL,
+                  confidence REAL,
+                  signals_json TEXT NOT NULL DEFAULT '[]',
+                  related_ids_json TEXT NOT NULL DEFAULT '[]',
+                  metrics_json TEXT NOT NULL DEFAULT '{}',
+                  error TEXT,
+                  created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_quality_traces_trace_id
+                ON quality_traces(trace_id, created_at);
                 """
             )
             try:
@@ -362,14 +391,14 @@ class MemoryStore:
         min_importance: float = 0.0,
         min_confidence: float = 0.0,
     ) -> list[SearchResult]:
+        fts_results: list[SearchResult] = []
         if self.fts_available:
             try:
-                results = self._search_memories_fts(query, limit, types, min_importance, min_confidence)
-                if results:
-                    return results
+                fts_results = self._search_memories_fts(query, limit, types, min_importance, min_confidence)
             except sqlite3.OperationalError:
                 self._fts_available = False
-        return self._search_memories_like(query, limit, types, min_importance, min_confidence)
+        like_results = self._search_memories_like(query, limit, types, min_importance, min_confidence)
+        return _merge_search_results(fts_results, like_results, limit=limit)
 
     def recent_memories(self, *, limit: int = 50) -> list[Memory]:
         with self.connect() as conn:
@@ -459,6 +488,7 @@ class MemoryStore:
                     "count": self._count_rows(conn, "policy_signals"),
                     "by_status": self._grouped_counts(conn, "policy_signals", "status"),
                 },
+                "quality_traces": {"count": self._count_rows(conn, "quality_traces")},
             }
             latest_write_at = self._latest_write_at(conn)
 
@@ -498,6 +528,33 @@ class MemoryStore:
             }
         return {"stats": stats, "details": details}
 
+    def add_quality_trace(self, trace: QualityTrace) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO quality_traces(
+                  id, trace_id, operation, stage, input_summary, provider, decision,
+                  confidence, signals_json, related_ids_json, metrics_json, error, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trace.id,
+                    trace.trace_id,
+                    trace.operation,
+                    trace.stage,
+                    trace.input_summary,
+                    trace.provider,
+                    trace.decision,
+                    trace.confidence,
+                    json.dumps(trace.signals, ensure_ascii=False),
+                    json.dumps(trace.related_ids, ensure_ascii=False),
+                    json.dumps(trace.metrics, ensure_ascii=False),
+                    trace.error,
+                    trace.created_at,
+                ),
+            )
+
     def mark_behavior_events_consolidated(self, ids: list[str], timestamp: str) -> None:
         if not ids:
             return
@@ -513,6 +570,7 @@ class MemoryStore:
             "context_packages",
             "profile_evidence",
             "profile_traits",
+            "quality_traces",
             "behavior_events",
             "policy_signals",
             "memories",
@@ -1088,6 +1146,8 @@ class MemoryStore:
                 SELECT created_at AS ts FROM behavior_events
                 UNION ALL
                 SELECT updated_at AS ts FROM policy_signals
+                UNION ALL
+                SELECT created_at AS ts FROM quality_traces
             )
             """
         ).fetchone()
@@ -1103,6 +1163,7 @@ class MemoryStore:
             ("profile_traits", "updated_at"),
             ("behavior_events", "created_at"),
             ("policy_signals", "updated_at"),
+            ("quality_traces", "created_at"),
         ]
         selects = [
             f"SELECT {column} AS ts FROM {table}"
@@ -1113,6 +1174,36 @@ class MemoryStore:
             return None
         row = conn.execute(f"SELECT MAX(ts) AS latest_write_at FROM ({' UNION ALL '.join(selects)})").fetchone()
         return row["latest_write_at"] if row and row["latest_write_at"] else None
+
+
+def _merge_search_results(
+    fts_results: list[SearchResult],
+    like_results: list[SearchResult],
+    *,
+    limit: int,
+) -> list[SearchResult]:
+    by_id: dict[str, SearchResult] = {}
+    for result in [*fts_results, *like_results]:
+        existing = by_id.get(result.memory.id)
+        if existing is None or _search_sort_score(result) > _search_sort_score(existing):
+            by_id[result.memory.id] = result
+
+    return sorted(
+        by_id.values(),
+        key=lambda result: (
+            _search_sort_score(result),
+            result.memory.importance,
+            result.memory.confidence,
+            result.memory.updated_at,
+        ),
+        reverse=True,
+    )[:limit]
+
+
+def _search_sort_score(result: SearchResult) -> float:
+    if result.score < 0:
+        return min(1.0, abs(result.score) * 100000)
+    return max(0.0, min(1.0, result.score))
 
 
 def re_split_words(query: str) -> list[str]:

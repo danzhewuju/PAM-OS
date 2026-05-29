@@ -238,6 +238,37 @@ def test_identity_questions_recall_legacy_semantic_name_memory(tmp_path):
     assert prepared.package.memory_ids
 
 
+def test_search_memory_merges_fts_and_like_for_semantic_results(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+    runtime.remember(
+        """
+        {
+          "type": "project",
+          "content": "PAM-OS 是本地优先记忆运行时。",
+          "importance": 0.8,
+          "confidence": 0.8,
+          "tags": ["pam-os", "project"]
+        }
+        """
+    )
+    runtime.remember(
+        """
+        {
+          "type": "semantic",
+          "content": "运行追踪会写入 quality_traces 表。",
+          "importance": 0.9,
+          "confidence": 0.9,
+          "tags": ["semantic", "quality_traces"]
+        }
+        """
+    )
+
+    results = runtime.search_memory("PAM-OS 运行追踪", limit=10)
+
+    assert any(result.memory.type == "semantic" for result in results)
+    assert any("quality_traces" in result.memory.content for result in results)
+
+
 def test_english_capture_phrasing_stores_stable_memory(tmp_path):
     runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
 
@@ -748,3 +779,41 @@ def test_clear_cli_clears_storage(tmp_path, capsys):
     assert '"deleted_counts"' in captured.out
     assert stats.tables["events"]["count"] == 0
     assert stats.tables["memories"]["count"] == 0
+
+
+
+def test_prepare_and_capture_write_quality_traces(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
+    runtime.prepare_context("按我的偏好继续做 PAM-OS。", force=True)
+
+    report = runtime.inspect_memory(table="quality_traces", limit=20)
+    traces = report["details"]["quality_traces"]
+    operations = {trace["operation"] for trace in traces}
+    stages = {trace["stage"] for trace in traces}
+
+    assert "capture_memory" in operations
+    assert "prepare_context" in operations
+    assert {"policy", "extract", "compile"} <= stages
+    assert all(trace["trace_id"] for trace in traces)
+    assert all(isinstance(trace["metrics"], dict) for trace in traces)
+
+
+def test_quality_eval_default_cases_pass(capsys):
+    exit_code = main(["eval"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "PAM-OS Memory Quality Eval" in captured.out
+    assert "Failed: 0" in captured.out
+
+
+def test_quality_eval_json_output(capsys):
+    exit_code = main(["eval", "--json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["failed"] == 0
+    assert payload["by_type"]["capture_policy"]["total"] >= 1

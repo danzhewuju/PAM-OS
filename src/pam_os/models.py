@@ -80,6 +80,23 @@ class CaptureResult:
 
 
 @dataclass(frozen=True)
+class QualityTrace:
+    id: str
+    trace_id: str
+    operation: str
+    stage: str
+    input_summary: str
+    provider: str
+    decision: str
+    confidence: float | None = None
+    signals: list[str] = field(default_factory=list)
+    related_ids: list[str] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+    created_at: str = field(default_factory=now_iso)
+
+
+@dataclass(frozen=True)
 class ProfileEvidence:
     id: str
     trait_key: str

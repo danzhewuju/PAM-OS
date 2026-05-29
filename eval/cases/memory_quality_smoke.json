@@ -1,0 +1,116 @@
+{
+  "cases": [
+    {
+      "id": "read_policy_project_continuation",
+      "type": "read_policy",
+      "input": "我继续做 PAM-OS，下一步怎么优化？",
+      "expected": {
+        "should_use": true,
+        "signals_any": [
+          "task_work_intent",
+          "task_work_reference",
+          "project_context_reference"
+        ]
+      }
+    },
+    {
+      "id": "read_policy_generic_python_sort",
+      "type": "read_policy",
+      "input": "Python list 怎么排序？",
+      "expected": {
+        "should_use": false
+      }
+    },
+    {
+      "id": "capture_project_decision_sqlite_first",
+      "type": "capture_policy",
+      "input": "我决定 PAM-OS MVP 先用 SQLite FTS5，不引入 Qdrant。",
+      "expected": {
+        "should_capture": true,
+        "memory_types": [
+          "project"
+        ],
+        "must_include": [
+          "SQLite FTS5",
+          "不引入 Qdrant"
+        ]
+      }
+    },
+    {
+      "id": "capture_transient_chat",
+      "type": "capture_policy",
+      "input": "哈哈好的",
+      "expected": {
+        "should_capture": false
+      }
+    },
+    {
+      "id": "retrieval_project_decision",
+      "type": "retrieval",
+      "setup": {
+        "memories": [
+          "我决定 PAM-OS MVP 先用 SQLite FTS5，不引入 Qdrant。"
+        ]
+      },
+      "query": "PAM-OS 存储方案",
+      "limit": 3,
+      "expected": {
+        "must_retrieve": [
+          "SQLite FTS5"
+        ]
+      }
+    },
+    {
+      "id": "retrieval_semantic_mixed_query",
+      "type": "retrieval",
+      "setup": {
+        "memories": [
+          {
+            "type": "project",
+            "content": "PAM-OS 是本地优先记忆运行时。",
+            "importance": 0.8,
+            "confidence": 0.8,
+            "tags": [
+              "pam-os",
+              "project"
+            ]
+          },
+          {
+            "type": "semantic",
+            "content": "运行追踪会写入 quality_traces 表。",
+            "importance": 0.9,
+            "confidence": 0.9,
+            "tags": [
+              "semantic",
+              "quality_traces"
+            ]
+          }
+        ]
+      },
+      "query": "PAM-OS 运行追踪",
+      "limit": 10,
+      "expected": {
+        "must_retrieve": [
+          "quality_traces"
+        ]
+      }
+    },
+    {
+      "id": "consolidation_preference_trait",
+      "type": "consolidation",
+      "setup": {
+        "memories": [
+          "我偏好 self-host、开源、可控系统。"
+        ]
+      },
+      "expected": {
+        "trait_keys": [
+          "general.preference"
+        ],
+        "must_include": [
+          "self-host"
+        ]
+      }
+    }
+  ]
+}

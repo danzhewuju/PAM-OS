@@ -447,7 +447,7 @@ PAM-OS 的默认实现是本地规则版，读写路径通过 provider 接口组
 
 默认 provider 位于 `pam_os.rule_provider`，`AdaptiveMemoryPolicy` 会先检查 `policy_signals`，再回退到规则策略。
 
-当前默认抽取器是 `RuleBasedExtractor`：如果输入是 JSON 则按显式 JSON 抽取，否则按关键字推断记忆类型。检索优先使用 SQLite FTS5，不可用时回退到 `LIKE` 查询。
+当前默认抽取器是 `RuleBasedExtractor`：如果输入是 JSON 则按显式 JSON 抽取，否则按关键字推断记忆类型。检索会合并 SQLite FTS5 与 `LIKE` 查询结果并去重排序；当 FTS5 不可用时仍可通过 `LIKE` 工作。
 
 ## 13. 项目结构
 
@@ -455,6 +455,8 @@ PAM-OS 的默认实现是本地规则版，读写路径通过 provider 接口组
 PAM-OS/
   config/
     pam-os.example.toml       示例配置
+  eval/
+    cases/                    记忆质量评估用例
   docs/
     design/                   设计文档
     usage.md                  本使用文档
@@ -469,6 +471,7 @@ PAM-OS/
     orchestrator.py           provider pipeline 协调、预算、重排
     context.py                上下文编译器
     consolidator.py           默认画像巩固兼容封装
+    quality.py                记忆质量评估器
     api.py                    REST API
     mcp.py                    MCP stdio server
     config.py                 配置加载
@@ -488,25 +491,65 @@ uv run --python 3.12 --extra dev pytest tests/test_runtime.py  # 运行时测试
 uv run --python 3.12 memory --help                          # 查看 CLI 帮助
 ```
 
-## 15. 常见问题
+## 15. 质量评估与可观测性
 
-### 15.1 插件安装后不生效
+PAM-OS 提供一个轻量的记忆质量评估闭环，用于验证读写策略、抽取、检索和画像巩固是否符合预期。默认评估用例位于 `eval/cases/`。
+
+运行默认评估：
+
+```bash
+uv run --python 3.12 memory eval
+```
+
+输出 JSON：
+
+```bash
+uv run --python 3.12 memory eval --json
+```
+
+指定单个用例文件或目录：
+
+```bash
+uv run --python 3.12 memory eval --cases eval/cases/memory_quality_smoke.json
+```
+
+当前支持的评估类型：
+
+| 类型 | 作用 |
+| --- | --- |
+| `read_policy` | 验证任务是否应该读取记忆。 |
+| `capture_policy` | 验证内容是否应该写入长期记忆，以及抽取出的类型和内容。 |
+| `extraction` | 验证原始事件抽取出的 memory type 和内容。 |
+| `retrieval` | 验证查询能否召回目标记忆。 |
+| `consolidation` | 验证记忆和行为证据能否巩固成预期画像。 |
+
+`prepare_context`、`capture_memory` 和 `consolidate_memory` 会写入 `quality_traces` 表，记录 operation、stage、provider、decision、signals、related_ids 和 metrics。可以通过 inspect 查看：
+
+```bash
+uv run --python 3.12 memory inspect --table quality_traces --limit 20
+```
+
+这套机制的目标不是替代单元测试，而是给后续规则调整、LLM provider、embedding retriever 和 reranker 优化提供可回归的质量基线。
+
+## 16. 常见问题
+
+### 16.1 插件安装后不生效
 
 重启对应客户端。检查 skill 文件是否在正确位置，MCP server 是否在客户端配置中注册。
 
-### 15.2 `prepare_context` 没有返回上下文
+### 16.2 `prepare_context` 没有返回上下文
 
 该工具会先判断任务是否需要记忆。普通问题可能只返回决策结果。如需强制使用记忆，传入 `force: true`。
 
-### 15.3 `capture_memory` 没有写入
+### 16.3 `capture_memory` 没有写入
 
 该工具会跳过短暂内容（如"哈哈好的"）。要强制保存，传入 `force: true`。
 
-### 15.4 搜索结果为空
+### 16.4 搜索结果为空
 
 可能原因：数据库路径不对（检查 `PAM_OS_DB` 和配置文件）、之前只保存了事件没抽取记忆、query 词和记忆内容差异太大。
 
-### 15.5 REST 报依赖缺失
+### 16.5 REST 报依赖缺失
 
 REST 需要 `--extra api`：
 
@@ -514,16 +557,16 @@ REST 需要 `--extra api`：
 uv run --python 3.12 --extra api memory serve
 ```
 
-### 15.6 配置文件没有生效
+### 16.6 配置文件没有生效
 
 检查优先级：CLI arguments > environment variables > config/pam-os.toml > built-in defaults。如果设置了 `PAM_OS_DB`，它会覆盖 `[storage].db_path`。
 
-## 16. 当前 MVP 边界
+## 17. 当前 MVP 边界
 
 - 抽取器是规则版，不调用 LLM。
 - 画像巩固也是规则版，主要覆盖偏好、回答风格、技术决策风格等有限模式。
 - policy signal 目前通过本地规则和显式学习 API 使用，LLM teacher 仍是后续扩展。
-- 检索是 SQLite FTS5 或 LIKE，不包含向量数据库。
+- 检索是 SQLite FTS5 + LIKE 的本地混合检索，不包含向量数据库。
 - `memory_links` 表已预留，但当前没有复杂图谱逻辑。
 - 上下文预算按字符裁剪，不是精确 token 预算。
 - 原始事件会保存；如需手动遗忘，可通过 `clear` 一次性清空全部记忆数据。

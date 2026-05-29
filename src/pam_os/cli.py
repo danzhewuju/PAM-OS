@@ -19,6 +19,7 @@ INSPECT_TABLE_CHOICES = [
     "behavior_events",
     "context_packages",
     "memory_links",
+    "quality_traces",
 ]
 
 
@@ -26,9 +27,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     config = load_config(args.config)
-    runtime = PersonalMemoryRuntime(db_path=args.db, config=config)
 
     try:
+        if args.command == "eval":
+            from pam_os.quality import evaluate_quality_cases
+
+            report = evaluate_quality_cases(args.cases, config=config)
+            if args.json:
+                print_json(report)
+            else:
+                print_eval_report(report)
+            return 0 if report["failed"] == 0 else 1
+
+        runtime = PersonalMemoryRuntime(db_path=args.db, config=config)
         if args.command == "init":
             path = runtime.init()
             print(f"Initialized memory database: {path}")
@@ -196,6 +207,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("stats", help="Show storage statistics")
 
+    eval_cmd = subparsers.add_parser("eval", help="Run memory quality evaluation cases")
+    eval_cmd.add_argument("--cases", action="append", help="Quality case file or directory. Defaults to eval/cases.")
+    eval_cmd.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+
     inspect = subparsers.add_parser("inspect", help="Inspect memory tables and rows")
     inspect.add_argument("--table", choices=INSPECT_TABLE_CHOICES, default="all")
     inspect.add_argument("--limit", type=int, default=20)
@@ -222,6 +237,30 @@ def build_parser() -> argparse.ArgumentParser:
 
 def print_json(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def print_eval_report(report: dict[str, Any]) -> None:
+    print("PAM-OS Memory Quality Eval")
+    print("=" * 60)
+    print(f"Total: {report['total']}  Passed: {report['passed']}  Failed: {report['failed']}")
+    print(f"Accuracy: {report['metrics'].get('accuracy', 0.0):.2f}")
+    print()
+    print("By Type")
+    print("-" * 60)
+    for case_type, info in sorted(report["by_type"].items()):
+        print(
+            f"{case_type}: {info['passed']}/{info['total']} "
+            f"passed, accuracy={info['accuracy']:.2f}"
+        )
+    failures = [result for result in report["results"] if not result["passed"]]
+    if failures:
+        print()
+        print("Failures")
+        print("-" * 60)
+        for result in failures:
+            print(f"{result['id']} ({result['type']})")
+            for failure in result["failures"]:
+                print(f"  - {failure['name']}: expected={failure.get('expected')} actual={failure.get('actual')}")
 
 
 def print_inspect_report(report: dict[str, Any]) -> None:
@@ -281,6 +320,8 @@ def format_inspect_title(table: str, row: dict[str, Any]) -> str:
         return f"{row.get('created_at')} memories={len(row.get('memory_ids') or [])}"
     if table == "memory_links":
         return f"{row.get('relation')} weight={row.get('weight')}"
+    if table == "quality_traces":
+        return f"{row.get('operation')}:{row.get('stage')} decision={row.get('decision')}"
     return str(row.get("id"))
 
 
@@ -321,6 +362,17 @@ def format_inspect_meta(table: str, row: dict[str, Any]) -> str:
         meta = {"source_ref": row.get("source_ref"), "metadata": row.get("metadata")}
     elif table == "context_packages":
         meta = {"memory_ids": row.get("memory_ids")}
+    elif table == "quality_traces":
+        meta = {
+            "trace_id": row.get("trace_id"),
+            "provider": row.get("provider"),
+            "confidence": row.get("confidence"),
+            "signals": row.get("signals"),
+            "related_ids": row.get("related_ids"),
+            "metrics": row.get("metrics"),
+            "error": row.get("error"),
+            "created_at": row.get("created_at"),
+        }
     else:
         meta = row
     return json.dumps(meta, ensure_ascii=False)

@@ -7,7 +7,7 @@ from pam_os.adaptive_policy import AdaptiveMemoryPolicy, PolicySignalLearner
 from pam_os.config import AppConfig, default_db_path, load_config
 from pam_os.context import ContextCompiler
 from pam_os.extractor import RuleBasedExtractor
-from pam_os.models import BehaviorEvent, CaptureResult, ContextPackage, Event, Memory, SearchResult, StorageStats, new_id
+from pam_os.models import BehaviorEvent, CaptureResult, ContextPackage, Event, Memory, QualityTrace, SearchResult, StorageStats, new_id
 from pam_os.orchestrator import ContextBudget, MemoryOrchestrator
 from pam_os.providers import MemoryExtractor, MemoryPolicy, MemoryReranker, MemoryRetriever, ProfileConsolidator
 from pam_os.rule_provider import RuleProfileConsolidator
@@ -122,15 +122,55 @@ class PersonalMemoryRuntime:
         limit: int | None = None,
         max_chars: int | None = None,
     ):
-        return self.orchestrator.prepare_context(
-            task,
-            conversation_summary=conversation_summary,
-            force=force,
-            budget=ContextBudget(
-                limit=limit or self.config.context.default_limit,
-                max_chars=max_chars or self.config.context.max_chars,
-            ),
+        trace_id = new_id("trc")
+        try:
+            prepared = self.orchestrator.prepare_context(
+                task,
+                conversation_summary=conversation_summary,
+                force=force,
+                budget=ContextBudget(
+                    limit=limit or self.config.context.default_limit,
+                    max_chars=max_chars or self.config.context.max_chars,
+                ),
+            )
+        except Exception as exc:
+            self._record_quality_trace(
+                trace_id=trace_id,
+                operation="prepare_context",
+                stage="error",
+                input_summary=task,
+                provider=type(self.orchestrator.policy).__name__,
+                decision="error",
+                error=str(exc),
+            )
+            raise
+
+        self._record_quality_trace(
+            trace_id=trace_id,
+            operation="prepare_context",
+            stage="policy",
+            input_summary=task,
+            provider=type(self.orchestrator.policy).__name__,
+            decision="use_memory" if prepared.decision.should_use else "skip_memory",
+            confidence=prepared.decision.confidence,
+            signals=prepared.decision.signals,
+            metrics={"force": force},
         )
+        self._record_quality_trace(
+            trace_id=trace_id,
+            operation="prepare_context",
+            stage="compile",
+            input_summary=task,
+            provider="MemoryOrchestrator",
+            decision="compiled" if prepared.package else "not_compiled",
+            related_ids=(prepared.package.memory_ids if prepared.package else []),
+            metrics={
+                "result_count": len(prepared.results),
+                "package_id": prepared.package.id if prepared.package else None,
+                "content_chars": len(prepared.package.content) if prepared.package else 0,
+            },
+        )
+        return prepared
 
     def should_capture_memory(self, content: str, metadata: dict[str, Any] | None = None):
         return self.orchestrator.should_capture_memory(content, metadata)
@@ -144,13 +184,51 @@ class PersonalMemoryRuntime:
         metadata: dict[str, Any] | None = None,
         force: bool = False,
     ):
-        result = self.orchestrator.capture_memory(
-            content,
-            remember_func=self.remember,
-            source=source,
-            source_ref=source_ref,
-            metadata=metadata,
-            force=force,
+        trace_id = new_id("trc")
+        try:
+            result = self.orchestrator.capture_memory(
+                content,
+                remember_func=self.remember,
+                source=source,
+                source_ref=source_ref,
+                metadata=metadata,
+                force=force,
+            )
+        except Exception as exc:
+            self._record_quality_trace(
+                trace_id=trace_id,
+                operation="capture_memory",
+                stage="error",
+                input_summary=content,
+                provider=type(self.orchestrator.policy).__name__,
+                decision="error",
+                error=str(exc),
+            )
+            raise
+
+        self._record_quality_trace(
+            trace_id=trace_id,
+            operation="capture_memory",
+            stage="policy",
+            input_summary=content,
+            provider=type(self.orchestrator.policy).__name__,
+            decision="capture" if result.should_capture else "skip_capture",
+            metrics={"force": force, "reason": result.reason},
+        )
+        self._record_quality_trace(
+            trace_id=trace_id,
+            operation="capture_memory",
+            stage="extract",
+            input_summary=content,
+            provider=type(self.extractor).__name__,
+            decision="stored" if result.memories else "no_memories",
+            related_ids=[memory.id for memory in result.memories],
+            metrics={
+                "memory_count": len(result.memories),
+                "created_count": result.created_count,
+                "updated_count": result.updated_count,
+                "memory_types": [memory.type for memory in result.memories],
+            },
         )
         self._maybe_auto_consolidate_after_capture(result)
         return result
@@ -189,7 +267,37 @@ class PersonalMemoryRuntime:
         return event
 
     def consolidate_memory(self, *, recent: int | None = None):
-        return self.consolidator.consolidate(recent=recent or self.config.consolidation.recent_limit)
+        trace_id = new_id("trc")
+        scan_limit = recent or self.config.consolidation.recent_limit
+        try:
+            result = self.consolidator.consolidate(recent=scan_limit)
+        except Exception as exc:
+            self._record_quality_trace(
+                trace_id=trace_id,
+                operation="consolidate_memory",
+                stage="error",
+                input_summary=f"recent={scan_limit}",
+                provider=type(self.consolidator).__name__,
+                decision="error",
+                error=str(exc),
+            )
+            raise
+        self._record_quality_trace(
+            trace_id=trace_id,
+            operation="consolidate_memory",
+            stage="complete",
+            input_summary=f"recent={scan_limit}",
+            provider=type(self.consolidator).__name__,
+            decision="consolidated",
+            related_ids=[trait.id for trait in result.traits_updated],
+            metrics={
+                "memories_scanned": result.memories_scanned,
+                "behavior_events_scanned": result.behavior_events_scanned,
+                "evidence_created": len(result.evidence_created),
+                "traits_updated": len(result.traits_updated),
+            },
+        )
+        return result
 
     def get_user_profile(self, *, limit: int | None = None, query: str | None = None):
         return self.store.list_profile_traits(limit=limit or self.config.profile.default_limit, query=query)
@@ -278,6 +386,38 @@ class PersonalMemoryRuntime:
         self.store.save_context_package(package)
         return package
 
+    def _record_quality_trace(
+        self,
+        *,
+        trace_id: str,
+        operation: str,
+        stage: str,
+        input_summary: str,
+        provider: str,
+        decision: str,
+        confidence: float | None = None,
+        signals: list[str] | None = None,
+        related_ids: list[str] | None = None,
+        metrics: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        self.store.add_quality_trace(
+            QualityTrace(
+                id=new_id("qtr"),
+                trace_id=trace_id,
+                operation=operation,
+                stage=stage,
+                input_summary=_summarize_trace_input(input_summary),
+                provider=provider,
+                decision=decision,
+                confidence=confidence,
+                signals=signals or [],
+                related_ids=related_ids or [],
+                metrics=metrics or {},
+                error=error,
+            )
+        )
+
     def get_storage_stats(self) -> StorageStats:
         return self.store.get_storage_stats()
 
@@ -290,3 +430,10 @@ class PersonalMemoryRuntime:
 
     def inspect_memory(self, *, table: str = "all", limit: int = 20, query: str | None = None) -> dict[str, Any]:
         return self.store.inspect_memory(table=table, limit=limit, query=query)
+
+
+def _summarize_trace_input(value: str, *, max_chars: int = 240) -> str:
+    summary = " ".join(value.strip().split())
+    if len(summary) <= max_chars:
+        return summary
+    return summary[: max_chars - 3].rstrip() + "..."
