@@ -9,6 +9,7 @@ description = "Personal AI Memory OS MVP: local Personal Memory Runtime with SQL
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "PAM-OS" }]
+license = { file = "LICENSE" }
 dependencies = []
 
 [project.optional-dependencies]

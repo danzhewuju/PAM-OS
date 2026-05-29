@@ -1,6 +1,30 @@
-# PAM-OS
+<div align="center">
+  <h1>PAM-OS</h1>
+  <p><strong>Personal AI Memory OS: a local-first memory runtime for AI agents.</strong></p>
+  <p>
+    <a href="README.zh-CN.md">简体中文</a> ·
+    <a href="docs/usage.md">Documentation</a> ·
+    <a href="https://github.com/danzhewuju/PAM-OS">GitHub</a>
+  </p>
+  <p>
+    <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-blue" /></a>
+    <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB" />
+    <img alt="SQLite" src="https://img.shields.io/badge/SQLite-local--first-003B57" />
+    <img alt="MCP" src="https://img.shields.io/badge/MCP-ready-6f42c1" />
+    <img alt="REST" src="https://img.shields.io/badge/REST-optional-009688" />
+  </p>
+  <p>
+    <a href="#install">Quick Start</a> ·
+    <a href="#use-demo">Demo</a> ·
+    <a href="#memory-architecture">Architecture</a> ·
+    <a href="#recommended-agent-workflow">Agent Workflow</a> ·
+    <a href="#rest-api">REST API</a> ·
+    <a href="#documentation">Docs</a> ·
+    <a href="#license">License</a>
+  </p>
+</div>
 
-Personal AI Memory OS: a local-first memory runtime for AI agents.
+---
 
 PAM-OS gives assistants a durable memory layer they can call before and after a task. It stores raw events, extracts structured memories, retrieves relevant context, consolidates stable profile traits, learns when memory should be used, and returns prompt-ready context packages through CLI, MCP, or REST.
 
@@ -397,6 +421,10 @@ PAM-OS is intentionally small today. The current runtime is the executable found
 - [Usage guide](docs/usage.md)
 - [Skill and plugin guide](docs/pam-os-skill-usage.md)
 - [Profile memory design](docs/design/people-understanding-profile-memory.md)
+
+## License
+
+PAM-OS is licensed under the [Apache License 2.0](LICENSE).
 
 ## Link
 ![认可linux.do](https://ld.xh.do/ld-badge.svg)
