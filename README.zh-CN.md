@@ -110,7 +110,7 @@ curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master
 如果想固定安装某个 Release tag：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/update.sh | bash -s -- --ref v0.2.0
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/update.sh | bash -s -- --ref v0.2.1
 ```
 
 ## 核心概念

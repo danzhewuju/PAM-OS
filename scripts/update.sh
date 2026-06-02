@@ -33,7 +33,7 @@ Options:
 
 Examples:
   curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/update.sh | bash
-  scripts/update.sh --ref v0.2.0 -- --codex --yes
+  scripts/update.sh --ref v0.2.1 -- --codex --yes
 USAGE
 }
 

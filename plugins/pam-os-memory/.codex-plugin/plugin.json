@@ -1,6 +1,6 @@
 {
   "name": "pam-os-memory",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Use PAM-OS local-first long-term memory from Codex, including context prep for project troubleshooting, analysis, solving, optimization, and automatic post-answer capture of stable preferences and project decisions.",
   "author": {
     "name": "PAM-OS"

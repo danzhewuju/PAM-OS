@@ -111,7 +111,7 @@ curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master
 Use a specific release tag when you want a pinned update:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/update.sh | bash -s -- --ref v0.2.0
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/update.sh | bash -s -- --ref v0.2.1
 ```
 
 ## Core Concepts
