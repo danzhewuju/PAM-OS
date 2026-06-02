@@ -86,6 +86,27 @@ Use this when your client supports Skills or project instructions, but does not 
 curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-skill.sh | bash
 ```
 
+### Update
+
+Check the installed runtime version and compare it with the latest GitHub release:
+
+```bash
+memory version
+memory update-check
+```
+
+Refresh the managed checkout and reinstall the integration:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/update.sh | bash
+```
+
+Use a specific release tag when you want a pinned update:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/update.sh | bash -s -- --ref v0.2.0
+```
+
 ## Core Concepts
 
 

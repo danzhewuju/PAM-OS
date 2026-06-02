@@ -9,6 +9,7 @@ from typing import Any, TextIO
 from pam_os.config import default_db_path, load_config
 from pam_os.runtime import PersonalMemoryRuntime
 from pam_os.serialization import to_plain
+from pam_os.version import __version__
 
 
 JSONRPC_VERSION = "2.0"
@@ -66,7 +67,7 @@ class PamOsMcpServer:
             return {
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "pam-os-memory", "version": "0.1.0"},
+                "serverInfo": {"name": "pam-os-memory", "version": __version__},
             }
         if method == "notifications/initialized":
             return {}

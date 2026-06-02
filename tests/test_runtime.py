@@ -7,6 +7,7 @@ from pam_os.cli import main
 from pam_os.config import AppConfig, ConsolidationConfig, load_config
 from pam_os.models import ConsolidationResult, MemoryUseDecision, SearchResult
 from pam_os.runtime import PersonalMemoryRuntime
+from pam_os.version import __version__
 
 
 class AlwaysReadPolicy:
@@ -813,6 +814,25 @@ def test_clear_cli_clears_storage(tmp_path, capsys):
     assert stats.tables["events"]["count"] == 0
     assert stats.tables["memories"]["count"] == 0
 
+
+
+def test_version_cli_outputs_current_version(capsys):
+    exit_code = main(["version"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert f"PAM-OS {__version__}" in captured.out
+
+
+def test_update_check_cli_compares_versions_offline(capsys):
+    exit_code = main(["update-check", "--latest-version", "v0.2.1", "--json"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["current_version"] == __version__
+    assert payload["latest_version"] == "0.2.1"
+    assert payload["update_available"] is True
 
 
 def test_prepare_and_capture_write_quality_traces(tmp_path):

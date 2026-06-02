@@ -86,6 +86,27 @@ curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master
 curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-skill.sh | bash
 ```
 
+### 更新
+
+查看当前安装版本，并和 GitHub 最新 Release 对比：
+
+```bash
+memory version
+memory update-check
+```
+
+刷新托管 checkout 并重新安装集成：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/update.sh | bash
+```
+
+如果想固定安装某个 Release tag：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/update.sh | bash -s -- --ref v0.2.0
+```
+
 ## 核心概念
 
 | 概念 | 含义 |

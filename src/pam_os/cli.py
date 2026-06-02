@@ -8,6 +8,7 @@ from typing import Any
 from pam_os.config import default_db_path, load_config
 from pam_os.runtime import PersonalMemoryRuntime
 from pam_os.serialization import to_plain
+from pam_os.version import DEFAULT_REPOSITORY, __version__, check_for_updates
 
 
 INSPECT_TABLE_CHOICES = [
@@ -29,6 +30,27 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
 
     try:
+        if args.command == "version":
+            payload = {"version": __version__}
+            if args.json:
+                print_json(payload)
+            else:
+                print(f"PAM-OS {__version__}")
+            return 0
+
+        if args.command == "update-check":
+            status = check_for_updates(
+                latest=args.latest_version,
+                repository=args.repository,
+                timeout=args.timeout,
+            )
+            payload = to_plain(status)
+            if args.json:
+                print_json(payload)
+            else:
+                print_update_status(payload)
+            return 1 if status.error and not args.latest_version else 0
+
         if args.command == "eval":
             from pam_os.quality import evaluate_quality_cases
 
@@ -157,6 +179,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db", default=None, help=f"SQLite database path. Default: {default_db_path()}")
     subparsers = parser.add_subparsers(dest="command")
 
+    version_cmd = subparsers.add_parser("version", help="Show the PAM-OS version")
+    version_cmd.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+
+    update_check = subparsers.add_parser("update-check", help="Check GitHub for a newer PAM-OS release")
+    update_check.add_argument("--repository", default=DEFAULT_REPOSITORY, help="GitHub repository in owner/name form")
+    update_check.add_argument("--timeout", type=float, default=5.0, help="HTTP timeout in seconds")
+    update_check.add_argument("--latest-version", help="Use a supplied latest version instead of calling GitHub")
+    update_check.add_argument("--json", action="store_true", help="Output machine-readable JSON")
+
     subparsers.add_parser("init", help="Initialize the memory database")
 
     add = subparsers.add_parser("add", help="Add a raw event and extract memories")
@@ -237,6 +268,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 def print_json(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def print_update_status(status: dict[str, Any]) -> None:
+    current = status.get("current_version")
+    latest = status.get("latest_version")
+    print("PAM-OS Update Check")
+    print("=" * 60)
+    print(f"Current: {current}")
+    print(f"Latest: {latest or '-'}")
+    if status.get("error"):
+        print(f"Error: {status['error']}")
+        print("Run again later, or pass --latest-version for an offline comparison.")
+        return
+    if status.get("update_available"):
+        print("Update available: yes")
+        if status.get("release_url"):
+            print(f"Release: {status['release_url']}")
+        print("Run: curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/update.sh | bash")
+    else:
+        print("Update available: no")
 
 
 def print_eval_report(report: dict[str, Any]) -> None:

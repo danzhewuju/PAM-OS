@@ -7,6 +7,7 @@ from typing import Any
 from pam_os.config import load_config
 from pam_os.runtime import PersonalMemoryRuntime
 from pam_os.serialization import to_plain
+from pam_os.version import __version__
 
 
 def create_app(db_path: Path | str | None = None, config=None):
@@ -27,7 +28,7 @@ def create_app(db_path: Path | str | None = None, config=None):
     def require_auth(credentials: HTTPBasicCredentials | None = Depends(security)) -> None:
         ensure_basic_auth(credentials, config.server.auth_enabled, config.server.auth_username, config.server.auth_password)
 
-    app = FastAPI(title="Personal Memory Runtime", version="0.1.0", dependencies=[Depends(require_auth)])
+    app = FastAPI(title="Personal Memory Runtime", version=__version__, dependencies=[Depends(require_auth)])
 
     class EventRequest(BaseModel):
         content: str
