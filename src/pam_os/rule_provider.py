@@ -14,6 +14,7 @@ from pam_os.models import (
     MemoryUseDecision,
     ProfileEvidence,
     ProfileTrait,
+    QueryIntent,
     SearchResult,
     new_id,
     now_iso,
@@ -354,6 +355,82 @@ class RuleMemoryPolicy:
         return MemoryUseDecision(False, "content looks transient", max(confidence, 0.3), signals)
 
 
+class RuleQueryIntentClassifier:
+    def classify(self, query: str, conversation_summary: str | None = None) -> QueryIntent:
+        text = f"{query}\n{conversation_summary or ''}".strip()
+        if not text:
+            return QueryIntent(False, "empty query", 0.0)
+
+        memory_types: list[str] = []
+        trait_keys: list[str] = []
+        signals: list[str] = []
+        if _matches_any(
+            text,
+            [
+                "我是谁",
+                "你知道我是谁",
+                "我的名字",
+                "我叫什么",
+                "我叫啥",
+                "姓名",
+                "身份",
+                r"\bwho am i\b",
+                r"\bwho i am\b",
+                r"\bmy name\b",
+                r"\bwhat am i called\b",
+                r"\bwhat is my name\b",
+                r"\bdo you know my name\b",
+                r"\bdo you remember my name\b",
+            ],
+        ):
+            memory_types.extend(["identity", "preference"])
+            trait_keys.extend(["profile.identity.", "general.preference", "preference."])
+            signals.append("intent:identity")
+
+        if _matches_any(
+            text,
+            [
+                "我喜欢什么",
+                "我的喜好",
+                "我的兴趣",
+                "我偏好什么",
+                r"\bwhat do i like\b",
+                r"\bwhat i like\b",
+                r"\bwhat are my interests\b",
+                r"\bmy interests\b",
+                r"\bmy preferences\b",
+                r"\bwhat do i prefer\b",
+            ],
+        ):
+            memory_types.append("preference")
+            trait_keys.extend(["general.preference", "preference."])
+            signals.append("intent:preference")
+
+        if _matches_any(text, ["回答风格", "我的风格", r"\bmy style\b", r"\busual style\b"]):
+            memory_types.append("style")
+            trait_keys.append("communication.answer_style")
+            signals.append("intent:style")
+
+        if _matches_any(text, ["当前项目", "这个项目", "项目背景", r"\bthis project\b", r"\bcurrent project\b"]):
+            memory_types.append("project")
+            trait_keys.append("project.")
+            signals.append("intent:project")
+
+        memory_types = _dedupe_strings(memory_types)
+        trait_keys = _dedupe_strings(trait_keys)
+        if not memory_types and not trait_keys:
+            return QueryIntent(False, "no namespace query intent", 0.0)
+        confidence = min(0.92, 0.58 + 0.08 * len(signals))
+        return QueryIntent(
+            True,
+            "query intent indicates memory namespace",
+            confidence,
+            memory_types=memory_types,
+            trait_keys=trait_keys,
+            signals=signals,
+        )
+
+
 class StoreMemoryRetriever:
     def __init__(self, store: MemoryStore):
         self.store = store
@@ -456,62 +533,65 @@ class RuleProfileConsolidator:
 
     def _candidate_from_memory(self, memory: Memory) -> TraitCandidate | None:
         text = memory.content
-        tags = set(memory.tags)
+        fact_key = self._fact_key_from_memory(memory)
         if memory.type == "identity":
-            return TraitCandidate(
+            return self._trait_candidate(
+                memory,
                 trait_type="identity",
-                trait_key="profile.identity.name",
-                statement=self._clean_statement(text),
+                trait_key=fact_key or "profile.identity.name",
                 scope="profile",
-                evidence_type="explicit_statement",
-                evidence_content=text,
-                confidence=memory.confidence,
             )
 
         if memory.type == "preference":
-            return TraitCandidate(
-                trait_type="preference",
-                trait_key="general.preference",
-                statement=self._clean_statement(text),
-                scope="general",
-                evidence_type="explicit_statement",
-                evidence_content=text,
-                confidence=memory.confidence,
-            )
+            trait_key = fact_key or "general.preference"
+            scope = "preferences" if trait_key.startswith("preference.") else "general"
+            return self._trait_candidate(memory, trait_type="preference", trait_key=trait_key, scope=scope)
 
         if memory.type == "style":
-            return TraitCandidate(
+            return self._trait_candidate(
+                memory,
                 trait_type="style",
-                trait_key="communication.answer_style",
-                statement=self._clean_statement(text),
+                trait_key=fact_key or "communication.answer_style",
                 scope="communication",
-                evidence_type="explicit_statement",
-                evidence_content=text,
-                confidence=memory.confidence,
             )
 
         if memory.type == "goal":
-            return TraitCandidate(
+            return self._trait_candidate(
+                memory,
                 trait_type="goal",
-                trait_key="long_term.goal",
-                statement=self._clean_statement(text),
+                trait_key=fact_key or "long_term.goal",
                 scope="goals",
-                evidence_type="explicit_statement",
-                evidence_content=text,
-                confidence=memory.confidence,
             )
 
         if memory.type == "project":
-            return TraitCandidate(
-                trait_type="project",
-                trait_key="project.active_context",
-                statement=self._clean_statement(text),
-                scope="project",
-                evidence_type="explicit_statement",
-                evidence_content=text,
-                confidence=memory.confidence,
-            )
+            trait_key = fact_key or "project.active_context"
+            return self._trait_candidate(memory, trait_type="project", trait_key=trait_key, scope="project")
 
+        return None
+
+    def _trait_candidate(
+        self,
+        memory: Memory,
+        *,
+        trait_type: str,
+        trait_key: str,
+        scope: str,
+    ) -> TraitCandidate:
+        return TraitCandidate(
+            trait_type=trait_type,
+            trait_key=trait_key,
+            statement=self._clean_statement(memory.content),
+            scope=scope,
+            evidence_type="explicit_statement",
+            evidence_content=memory.content,
+            confidence=memory.confidence,
+        )
+
+    def _fact_key_from_memory(self, memory: Memory) -> str | None:
+        for tag in memory.tags:
+            if tag.startswith("fact:"):
+                key = tag.removeprefix("fact:").strip()
+                return key or None
         return None
 
     def _candidate_from_behavior_event(self, event: BehaviorEvent) -> TraitCandidate | None:
@@ -615,6 +695,23 @@ class RuleProfileConsolidator:
         for trait in traits:
             by_key[trait.trait_key] = trait
         return list(by_key.values())
+
+
+def _matches_any(text: str, patterns: list[str]) -> bool:
+    for pattern in patterns:
+        if pattern.startswith("\\b") or "(?:" in pattern or "\\s" in pattern:
+            try:
+                if re.search(pattern, text, flags=re.IGNORECASE):
+                    return True
+            except re.error:
+                continue
+        elif _contains_marker(text.lower(), pattern):
+            return True
+    return False
+
+
+def _dedupe_strings(items: list[str]) -> list[str]:
+    return [item for index, item in enumerate(items) if item and item not in items[:index]]
 
 
 def _matched_signals(text: str, signal_map: dict[str, list[str]]) -> list[str]:

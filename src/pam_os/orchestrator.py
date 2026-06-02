@@ -5,9 +5,9 @@ from typing import Any
 
 from pam_os.config import OrchestratorConfig
 from pam_os.context import ContextCompiler
-from pam_os.models import CaptureResult, Event, MemoryUseDecision, PreparedContext, SearchResult, new_id
+from pam_os.models import CaptureResult, Event, MemoryUseDecision, PreparedContext, QueryIntent, SearchResult, new_id
 from pam_os.providers import MemoryPolicy, MemoryReranker, MemoryRetriever
-from pam_os.rule_provider import RuleMemoryPolicy, RuleMemoryReranker, StoreMemoryRetriever
+from pam_os.rule_provider import RuleMemoryPolicy, RuleMemoryReranker, RuleQueryIntentClassifier, StoreMemoryRetriever
 from pam_os.store import MemoryStore
 
 
@@ -41,6 +41,7 @@ class MemoryOrchestrator:
         policy: MemoryPolicy | None = None,
         retriever: MemoryRetriever | None = None,
         reranker: MemoryReranker | None = None,
+        query_intent_classifier: Any | None = None,
     ):
         self.store = store
         self.compiler = compiler
@@ -49,6 +50,7 @@ class MemoryOrchestrator:
         self.policy = policy or RuleMemoryPolicy(self.config)
         self.retriever = retriever or StoreMemoryRetriever(store)
         self.reranker = reranker or RuleMemoryReranker()
+        self.query_intent_classifier = query_intent_classifier or RuleQueryIntentClassifier()
 
     def should_use_memory(self, task: str, conversation_summary: str | None = None) -> MemoryUseDecision:
         return self.policy.decide_read(task, conversation_summary)
@@ -62,14 +64,21 @@ class MemoryOrchestrator:
         budget: ContextBudget | None = None,
     ) -> PreparedContext:
         budget = budget or ContextBudget()
+        query = self._query_for(task, conversation_summary)
+        intent = self.query_intent_classifier.classify(query)
         decision = self.should_use_memory(task, conversation_summary)
+        if not decision.should_use and intent.should_read:
+            decision = MemoryUseDecision(True, intent.reason, intent.confidence, intent.signals)
         if not force and not decision.should_use:
             return PreparedContext(decision=decision, package=None, results=[])
 
-        query = self._query_for(task, conversation_summary)
-        profile_traits = self._profile_traits_for(query)
+        profile_traits = self._profile_traits_for(query, intent)
         candidate_limit = max(budget.limit * self.config.candidate_multiplier, budget.limit)
-        raw_results = self.retriever.retrieve(query, limit=candidate_limit)
+        raw_results = self.retriever.retrieve(query, limit=candidate_limit, types=intent.memory_types or None)
+        if not raw_results and intent.memory_types:
+            raw_results = self.retriever.retrieve("", limit=candidate_limit, types=intent.memory_types)
+        if not raw_results and intent.memory_types:
+            raw_results = self.retriever.retrieve(query, limit=candidate_limit)
         ranked = self.reranker.rerank(query, raw_results)
         selected = self._apply_budget(ranked, budget)
         package = self.compiler.compile(task, selected, max_chars=budget.max_chars, profile_traits=profile_traits)
@@ -141,16 +150,32 @@ class MemoryOrchestrator:
             return f"{task}\n{conversation_summary}"
         return task
 
-    def _profile_traits_for(self, query: str):
+    def _profile_traits_for(self, query: str, intent: QueryIntent | None = None):
         related = self.store.list_profile_traits(limit=self.profile_limit, query=query)
-        stable = self.store.list_profile_traits(limit=self.profile_limit)
-        by_key = {trait.trait_key: trait for trait in stable}
+        stable = self.store.list_profile_traits(limit=max(self.profile_limit, 50))
+        by_key = {trait.trait_key: trait for trait in stable[: self.profile_limit]}
         by_key.update({trait.trait_key: trait for trait in related})
+        if intent and intent.trait_keys:
+            by_key.update(
+                {
+                    trait.trait_key: trait
+                    for trait in stable
+                    if self._trait_matches_intent(trait.trait_key, intent.trait_keys)
+                }
+            )
         return sorted(
             by_key.values(),
             key=lambda item: (item.stability, item.confidence, item.evidence_count),
             reverse=True,
         )[: self.profile_limit]
+
+    def _trait_matches_intent(self, trait_key: str, intent_keys: list[str]) -> bool:
+        for key in intent_keys:
+            if key.endswith(".") and trait_key.startswith(key):
+                return True
+            if trait_key == key:
+                return True
+        return False
 
     def _apply_budget(self, results: list[SearchResult], budget: ContextBudget) -> list[SearchResult]:
         selected: list[SearchResult] = []

@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any, Protocol
 
-from pam_os.models import Memory, new_id, now_iso
+from pam_os.models import Memory, MemoryFactCandidate, new_id, now_iso
 
 
 MEMORY_TYPES = {"semantic", "episodic", "identity", "preference", "goal", "project", "style"}
@@ -27,11 +27,28 @@ class RuleBasedExtractor:
         if explicit:
             return explicit
 
-        memories = self._extract_rule_based(event_id, content)
-        if memories:
-            return memories
+        facts = self.extract_facts(content)
+        if facts:
+            return self._dedupe_memories([self._memory_from_fact(event_id, fact) for fact in facts])
 
         return [self._memory_from_content(event_id, content, self._infer_type(content))]
+
+    def extract_facts(self, content: str) -> list[MemoryFactCandidate]:
+        facts: list[MemoryFactCandidate] = []
+        identity = self._extract_identity_name(content)
+        if identity:
+            facts.append(self._fact_from_content("identity", f"用户姓名是{identity}", value=identity))
+        else:
+            memory_type = self._infer_type(content)
+            if memory_type in {"preference", "goal", "project", "style"}:
+                return self._dedupe_facts([self._fact_from_content(memory_type, content)])
+
+        for clause in self._stable_clauses(content):
+            memory_type = self._infer_type(clause)
+            if memory_type in {"preference", "goal", "project", "style"}:
+                facts.append(self._fact_from_content(memory_type, clause))
+
+        return self._dedupe_facts(facts)
 
     def _extract_explicit_json(self, event_id: str, content: str) -> list[Memory]:
         payload = self._parse_json_payload(content)
@@ -62,22 +79,36 @@ class RuleBasedExtractor:
         return memories
 
     def _extract_rule_based(self, event_id: str, content: str) -> list[Memory]:
-        memories: list[Memory] = []
-        identity = self._extract_identity_name(content)
-        if identity:
-            memories.append(self._memory_from_content(event_id, f"用户姓名是{identity}", "identity"))
-        else:
-            memory_type = self._infer_type(content)
-            if memory_type in {"preference", "goal", "project", "style"}:
-                memories.append(self._memory_from_content(event_id, content, memory_type))
-                return self._dedupe_memories(memories)
+        return self._dedupe_memories([self._memory_from_fact(event_id, fact) for fact in self.extract_facts(content)])
 
-        for clause in self._stable_clauses(content):
-            memory_type = self._infer_type(clause)
-            if memory_type in {"preference", "goal", "project", "style"}:
-                memories.append(self._memory_from_content(event_id, clause, memory_type))
+    def _fact_from_content(self, memory_type: str, evidence: str, *, value: str | None = None) -> MemoryFactCandidate:
+        key = self._infer_fact_key(evidence, memory_type)
+        value = value or self._infer_fact_value(evidence, memory_type)
+        tags = {*self._infer_tags(evidence, memory_type), f"fact:{key}"}
+        return MemoryFactCandidate(
+            type=memory_type,
+            key=key,
+            value=value,
+            evidence=evidence.strip(),
+            content=self._normalize_content(evidence, memory_type),
+            importance=self._infer_importance(evidence, memory_type),
+            confidence=0.72 if memory_type in {"identity", "preference", "goal", "project", "style"} else 0.62,
+            tags=sorted(tags),
+        )
 
-        return self._dedupe_memories(memories)
+    def _memory_from_fact(self, event_id: str, fact: MemoryFactCandidate) -> Memory:
+        timestamp = now_iso()
+        return Memory(
+            id=new_id("mem"),
+            event_id=event_id,
+            type=fact.type,
+            content=fact.content,
+            importance=fact.importance,
+            confidence=fact.confidence,
+            tags=fact.tags,
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
 
     def _memory_from_content(self, event_id: str, content: str, memory_type: str) -> Memory:
         timestamp = now_iso()
@@ -140,6 +171,17 @@ class RuleBasedExtractor:
     def _stable_clauses(self, content: str) -> list[str]:
         return [clause.strip() for clause in re.split(r"[，,。；;！!？?\n]+", content) if clause.strip()]
 
+    def _dedupe_facts(self, facts: list[MemoryFactCandidate]) -> list[MemoryFactCandidate]:
+        seen: set[tuple[str, str, str]] = set()
+        deduped: list[MemoryFactCandidate] = []
+        for fact in facts:
+            key = (fact.type, fact.key, " ".join(fact.value.lower().split()))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(fact)
+        return deduped
+
     def _dedupe_memories(self, memories: list[Memory]) -> list[Memory]:
         seen: set[tuple[str, str]] = set()
         deduped: list[Memory] = []
@@ -162,6 +204,43 @@ class RuleBasedExtractor:
             return json.loads(text)
         except json.JSONDecodeError:
             return None
+
+    def _infer_fact_key(self, content: str, memory_type: str) -> str:
+        lower = content.lower()
+        if memory_type == "identity":
+            return "profile.identity.name"
+        if memory_type == "preference":
+            if any(token in content for token in ["喜欢", "感兴趣"]) or any(
+                token in lower for token in ["i like", "interested in"]
+            ):
+                return "preference.interests"
+            return "general.preference"
+        if memory_type == "style":
+            return "communication.answer_style"
+        if memory_type == "goal":
+            return "long_term.goal"
+        if memory_type == "project":
+            if any(token in content for token in ["决定", "先用", "不引入"]) or any(
+                token in lower for token in ["decided", "decision", "will use", "should use", "not introduce"]
+            ):
+                return "project.technical_decision"
+            return "project.active_context"
+        return f"memory.{memory_type}"
+
+    def _infer_fact_value(self, content: str, memory_type: str) -> str:
+        stripped = " ".join(content.strip().split())
+        if memory_type == "preference":
+            patterns = [
+                r"\bi like\s+(.+)$",
+                r"\bi prefer\s+(.+)$",
+                r"我喜欢(.+)$",
+                r"我偏好(.+)$",
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, stripped, flags=re.IGNORECASE)
+                if match:
+                    return match.group(1).strip(" 。.，,")
+        return stripped.strip(" 。.，,")
 
     def _infer_type(self, content: str) -> str:
         lower = content.lower()

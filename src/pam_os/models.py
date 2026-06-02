@@ -40,6 +40,28 @@ class Memory:
 
 
 @dataclass(frozen=True)
+class MemoryFactCandidate:
+    type: str
+    key: str
+    value: str
+    evidence: str
+    content: str
+    importance: float
+    confidence: float
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class QueryIntent:
+    should_read: bool
+    reason: str
+    confidence: float
+    memory_types: list[str] = field(default_factory=list)
+    trait_keys: list[str] = field(default_factory=list)
+    signals: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class SearchResult:
     memory: Memory
     score: float

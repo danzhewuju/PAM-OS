@@ -193,7 +193,7 @@ def test_capture_identity_and_preference_sentence_splits_memories(tmp_path):
     trait_keys = {trait.trait_key for trait in runtime.get_user_profile()}
 
     assert "profile.identity.name" in trait_keys
-    assert "general.preference" in trait_keys
+    assert "preference.interests" in trait_keys
 
 
 def test_english_identity_and_preference_roundtrip(tmp_path):
@@ -204,12 +204,29 @@ def test_english_identity_and_preference_roundtrip(tmp_path):
 
     assert captured.should_capture is True
     assert {memory.type for memory in captured.memories} == {"identity", "preference"}
-    assert any(memory.content == "用户姓名是Alex" for memory in captured.memories)
-    assert any("I like digital products" in memory.content for memory in captured.memories)
+    identity = next(memory for memory in captured.memories if memory.type == "identity")
+    preference = next(memory for memory in captured.memories if memory.type == "preference")
+
+    assert identity.content == "用户姓名是Alex"
+    assert "fact:profile.identity.name" in identity.tags
+    assert "I like digital products" in preference.content
+    assert "fact:preference.interests" in preference.tags
     assert prepared.decision.should_use is True
     assert prepared.package is not None
     assert "用户姓名是Alex" in prepared.package.content
     assert "I like digital products" in prepared.package.content
+
+    interests = runtime.prepare_context("What are my interests?")
+
+    assert interests.decision.should_use is True
+    assert interests.package is not None
+    assert "I like digital products" in interests.package.content
+
+    runtime.consolidate_memory(recent=100)
+    trait_keys = {trait.trait_key for trait in runtime.get_user_profile()}
+
+    assert "profile.identity.name" in trait_keys
+    assert "preference.interests" in trait_keys
 
 
 def test_identity_statement_without_preference_is_captured(tmp_path):
