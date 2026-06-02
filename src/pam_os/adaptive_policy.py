@@ -99,6 +99,23 @@ class TextPolicyFeatureExtractor:
                     r"\bwhat I said\b",
                     r"\bfrom memory\b",
                 ],
+                "identity_reference": [
+                    "我是谁",
+                    "你知道我是谁",
+                    "我的名字",
+                    "我叫什么",
+                    "我叫啥",
+                    "姓名",
+                    "身份",
+                    r"\bwho am i\b",
+                    r"\bwho i am\b",
+                    r"\bmy name\b",
+                    r"\bwhat am i called\b",
+                    r"\bwhat is my name\b",
+                    r"\bdo you know my name\b",
+                    r"\bdo you remember my name\b",
+                    r"\bidentity\b",
+                ],
             },
         )
         if self._looks_generic_question(text) and not features.names - {"question", "generic_question"}:
@@ -132,6 +149,8 @@ class TextPolicyFeatureExtractor:
                     r"\bmy name is\b",
                     r"\bi am called\b",
                     r"\bi'm called\b",
+                    r"\b(?:hello|hi|hey),?\s+i am [A-Za-z][A-Za-z0-9_-]{1,31}\b",
+                    r"\b(?:hello|hi|hey),?\s+i'm [A-Za-z][A-Za-z0-9_-]{1,31}\b",
                 ],
                 "preference_statement": [
                     "我偏好",
@@ -315,6 +334,7 @@ class AdaptiveMemoryPolicy:
             "project_context_reference": 0.22,
             "task_work_intent": 0.28,
             "memory_reference": 0.24,
+            "identity_reference": 0.42,
             "first_person": 0.08,
         }
         score = 0.24 + sum(weights.get(name, 0.0) for name in features.names)

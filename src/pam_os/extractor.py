@@ -100,6 +100,8 @@ class RuleBasedExtractor:
             r"\bmy name is\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
             r"\bi am called\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
             r"\bi'm called\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
+            r"\bi am\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
+            r"\bi'm\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
         ]
         for pattern in patterns:
             match = re.search(pattern, content, flags=re.IGNORECASE)
@@ -112,6 +114,27 @@ class RuleBasedExtractor:
     def _looks_like_identity_name(self, candidate: str) -> bool:
         if re.fullmatch(r"[\u4e00-\u9fff]{2,8}", candidate):
             return not candidate.startswith(("一个", "一名", "个", "名"))
+        non_names = {
+            "called",
+            "doing",
+            "going",
+            "working",
+            "using",
+            "trying",
+            "planning",
+            "building",
+            "learning",
+            "interested",
+            "curious",
+            "happy",
+            "glad",
+            "sorry",
+            "sure",
+            "here",
+            "not",
+        }
+        if candidate.lower() in non_names:
+            return False
         return re.fullmatch(r"[A-Za-z][A-Za-z0-9_\-]{1,31}", candidate) is not None
 
     def _stable_clauses(self, content: str) -> list[str]:

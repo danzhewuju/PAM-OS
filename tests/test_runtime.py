@@ -196,6 +196,22 @@ def test_capture_identity_and_preference_sentence_splits_memories(tmp_path):
     assert "general.preference" in trait_keys
 
 
+def test_english_identity_and_preference_roundtrip(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory("Hello, I'm Alex, I like digital products.")
+    prepared = runtime.prepare_context("Hello, who am I?")
+
+    assert captured.should_capture is True
+    assert {memory.type for memory in captured.memories} == {"identity", "preference"}
+    assert any(memory.content == "用户姓名是Alex" for memory in captured.memories)
+    assert any("I like digital products" in memory.content for memory in captured.memories)
+    assert prepared.decision.should_use is True
+    assert prepared.package is not None
+    assert "用户姓名是Alex" in prepared.package.content
+    assert "I like digital products" in prepared.package.content
+
+
 def test_identity_statement_without_preference_is_captured(tmp_path):
     runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
 
