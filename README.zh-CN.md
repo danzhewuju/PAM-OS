@@ -78,6 +78,12 @@ Task/Event
 curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-plugin.sh | bash
 ```
 
+本地开发时，如果想直接用当前 checkout 的改动安装测试，而不是先 push 再 curl 远程脚本：
+
+```bash
+scripts/install-plugin-local.sh
+```
+
 ### 仅安装 Skill
 
 适用于客户端支持 Skills 或项目指令，但不需要插件发现或 MCP 工具注册的场景。安装器会下载并安装 `pam-os-memory` skill，然后默认配置为通过 CLI 调用本地 PAM-OS 运行时。

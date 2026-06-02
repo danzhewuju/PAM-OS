@@ -78,6 +78,13 @@ Use this for Codex, Claude Code, OpenCode, or Hermes integration. The installer 
 curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-plugin.sh | bash
 ```
 
+For local development installs from the current checkout, without pushing to
+GitHub first:
+
+```bash
+scripts/install-plugin-local.sh
+```
+
 ### Skill-only
 
 Use this when your client supports Skills or project instructions, but does not need plugin discovery or MCP tool registration. The installer downloads and installs the `pam-os-memory` skill, then configures it to call the local PAM-OS runtime through CLI by default.
