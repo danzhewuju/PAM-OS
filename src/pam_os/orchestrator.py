@@ -75,8 +75,9 @@ class MemoryOrchestrator:
         profile_traits = self._profile_traits_for(query, intent)
         candidate_limit = max(budget.limit * self.config.candidate_multiplier, budget.limit)
         raw_results = self.retriever.retrieve(query, limit=candidate_limit, types=intent.memory_types or None)
-        if not raw_results and intent.memory_types:
-            raw_results = self.retriever.retrieve("", limit=candidate_limit, types=intent.memory_types)
+        if intent.memory_types:
+            intent_fallback = self.retriever.retrieve("", limit=candidate_limit, types=intent.memory_types)
+            raw_results = self._merge_results(raw_results, intent_fallback)
         if not raw_results and intent.memory_types:
             raw_results = self.retriever.retrieve(query, limit=candidate_limit)
         ranked = self.reranker.rerank(query, raw_results)
@@ -176,6 +177,15 @@ class MemoryOrchestrator:
             if trait_key == key:
                 return True
         return False
+
+    def _merge_results(self, primary: list[SearchResult], fallback: list[SearchResult]) -> list[SearchResult]:
+        by_id = {result.memory.id: result for result in primary}
+        merged = list(primary)
+        for result in fallback:
+            if result.memory.id in by_id:
+                continue
+            merged.append(result)
+        return merged
 
     def _apply_budget(self, results: list[SearchResult], budget: ContextBudget) -> list[SearchResult]:
         selected: list[SearchResult] = []

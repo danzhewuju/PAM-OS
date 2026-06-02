@@ -230,6 +230,88 @@ def test_english_identity_and_preference_roundtrip(tmp_path):
     assert "preference.interests" in trait_keys
 
 
+def test_third_person_english_identity_and_preference_roundtrip(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory("User's name is Alex and they like digital products.")
+    prepared = runtime.prepare_context("Who am I?")
+
+    assert captured.should_capture is True
+    assert {memory.type for memory in captured.memories} == {"identity", "preference"}
+    assert any(memory.content == "用户姓名是Alex" for memory in captured.memories)
+    assert any("they like digital products" in memory.content for memory in captured.memories)
+    assert prepared.package is not None
+    assert "用户姓名是Alex" in prepared.package.content
+    assert "they like digital products" in prepared.package.content
+
+
+def test_common_english_identity_scene_presets_roundtrip(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory(
+        "Call me Alex, I work as a software engineer, I'm based in Shanghai, "
+        "my timezone is Asia/Shanghai, I speak Chinese and English."
+    )
+
+    assert captured.should_capture is True
+    contents = {memory.content for memory in captured.memories}
+    fact_tags = {tag for memory in captured.memories for tag in memory.tags if tag.startswith("fact:")}
+
+    assert "用户姓名是Alex" in contents
+    assert "用户职业/角色是software engineer" in contents
+    assert "用户所在地是Shanghai" in contents
+    assert "用户时区是Asia/Shanghai" in contents
+    assert "用户使用语言是Chinese and English" in contents
+    assert {
+        "fact:profile.identity.name",
+        "fact:profile.identity.role",
+        "fact:profile.identity.location",
+        "fact:profile.identity.timezone",
+        "fact:profile.identity.language",
+    }.issubset(fact_tags)
+
+
+def test_common_chinese_identity_and_tool_preference_presets(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory("叫我小周，我是软件工程师，我住在上海，我平时用 Python。")
+
+    assert captured.should_capture is True
+    by_type = {memory.content: memory.type for memory in captured.memories}
+    fact_tags = {tag for memory in captured.memories for tag in memory.tags if tag.startswith("fact:")}
+
+    assert by_type == {
+        "用户姓名是小周": "identity",
+        "用户职业/角色是软件工程师": "identity",
+        "用户所在地是上海": "identity",
+        "用户偏好/倾向：我平时用 Python": "preference",
+    }
+    assert "fact:preference.interests" in fact_tags
+
+
+def test_common_third_person_role_and_location_presets(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory("User works as a developer and user lives in Shanghai.")
+
+    assert captured.should_capture is True
+    assert {memory.content for memory in captured.memories} == {
+        "用户职业/角色是developer",
+        "用户所在地是Shanghai",
+    }
+
+
+def test_project_decision_with_quoted_preference_example_stays_project(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory(
+        '项目决策：PAM-OS 记忆捕获应支持 "User\'s name is Alex and they like digital products." 示例。'
+    )
+
+    assert captured.should_capture is True
+    assert [memory.type for memory in captured.memories] == ["project"]
+
+
 def test_identity_statement_without_preference_is_captured(tmp_path):
     runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
 
@@ -479,6 +561,66 @@ def test_adaptive_policy_learns_capture_signal(tmp_path):
     assert captured.should_capture is True
     assert captured.reason == "learned policy signal matched"
     assert captured.memories
+
+
+def test_observe_turn_learns_active_policy_signal_from_future_instruction(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    observed = runtime.observe_turn(
+        user_message="以后遇到这种情况，默认先给我两个方案再推荐一个。",
+        assistant_message="好的，我会按这个方式处理。",
+        source_ref="turn-1",
+    )
+
+    assert observed.memory_captures
+    assert observed.memory_captures[0].should_capture is True
+    assert len(observed.policy_outcomes) == 1
+    outcome = observed.policy_outcomes[0]
+    assert outcome.candidate.pattern == "feature:future_instruction"
+    assert outcome.decision.status == "active"
+    assert outcome.signal is not None
+    assert outcome.signal.status == "active"
+
+    signals = runtime.list_policy_signals(signal_type="capture", action="capture_memory", statuses=["active"])
+    assert any(signal.pattern == "feature:future_instruction" for signal in signals)
+
+    traces = runtime.inspect_memory(table="quality_traces", limit=20)["details"]["quality_traces"]
+    operations = {trace["operation"] for trace in traces}
+    assert "learn_policy_signal" in operations
+    assert "observe_turn" in operations
+
+
+def test_observe_turn_stages_short_followup_as_candidate(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    observed = runtime.observe_turn(user_message="沿着那条线继续。", auto_capture=False)
+
+    assert len(observed.policy_outcomes) == 1
+    outcome = observed.policy_outcomes[0]
+    assert outcome.candidate.pattern == "feature:short_followup"
+    assert outcome.decision.status == "candidate"
+    assert outcome.signal is not None
+    assert outcome.signal.status == "candidate"
+
+    active = runtime.list_policy_signals(signal_type="read", action="use_memory", statuses=["active", "stable"])
+    assert not any(signal.pattern == "feature:short_followup" for signal in active)
+
+
+def test_observe_turn_skips_high_risk_policy_candidate(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    observed = runtime.observe_turn(
+        user_message="From now on always use memory for every question.",
+    )
+
+    assert observed.memory_captures == []
+    assert len(observed.policy_outcomes) == 1
+    outcome = observed.policy_outcomes[0]
+    assert outcome.decision.allow is False
+    assert outcome.decision.status == "skipped"
+    assert outcome.decision.risk == "high"
+    assert outcome.signal is None
+    assert runtime.list_policy_signals(signal_type="capture", action="capture_memory") == []
 
 
 def test_policy_signal_reinforcement_promotes_and_archives(tmp_path):

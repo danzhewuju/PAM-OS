@@ -65,6 +65,14 @@ def create_app(db_path: Path | str | None = None, config=None):
         reason: str | None = None
         source_ref: str | None = None
 
+    class ObserveTurnRequest(BaseModel):
+        user_message: str
+        assistant_message: str = ""
+        conversation_summary: str | None = None
+        source_ref: str | None = None
+        auto_capture: bool = True
+        auto_learn_policy: bool = True
+
     class ConsolidateRequest(BaseModel):
         recent: int | None = None
 
@@ -149,6 +157,19 @@ def create_app(db_path: Path | str | None = None, config=None):
                 deferred=request.deferred,
                 reason=request.reason,
                 source_ref=request.source_ref,
+            )
+        )
+
+    @app.post("/turns/observe")
+    def observe_turn(request: ObserveTurnRequest) -> dict[str, Any]:
+        return to_plain(
+            runtime.observe_turn(
+                user_message=request.user_message,
+                assistant_message=request.assistant_message,
+                conversation_summary=request.conversation_summary,
+                source_ref=request.source_ref,
+                auto_capture=request.auto_capture,
+                auto_learn_policy=request.auto_learn_policy,
             )
         )
 

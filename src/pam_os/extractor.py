@@ -35,15 +35,17 @@ class RuleBasedExtractor:
 
     def extract_facts(self, content: str) -> list[MemoryFactCandidate]:
         facts: list[MemoryFactCandidate] = []
-        identity = self._extract_identity_name(content)
-        if identity:
-            facts.append(self._fact_from_content("identity", f"用户姓名是{identity}", value=identity))
-        else:
+        if self._is_project_decision(content):
+            return [self._fact_from_content("project", content)]
+
+        facts.extend(self._extract_identity_facts(content))
+        if not facts:
             memory_type = self._infer_type(content)
             if memory_type in {"preference", "goal", "project", "style"}:
                 return self._dedupe_facts([self._fact_from_content(memory_type, content)])
 
         for clause in self._stable_clauses(content):
+            facts.extend(self._extract_identity_facts(clause))
             memory_type = self._infer_type(clause)
             if memory_type in {"preference", "goal", "project", "style"}:
                 facts.append(self._fact_from_content(memory_type, clause))
@@ -128,6 +130,14 @@ class RuleBasedExtractor:
         patterns = [
             r"(?:我是|我叫|用户叫|用户姓名是|我的名字是|我的姓名是)\s*([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_\-·]{1,31})",
             r"用户身份信息[:：]\s*(?:用户姓名是|用户叫)?\s*([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_\-·]{1,31})",
+            r"\bthe user is called\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
+            r"\buser is called\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
+            r"\bthe user(?:'s)? name is\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
+            r"\buser(?:'s|s)? name is\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
+            r"\bplease call me\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
+            r"\bcall me\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
+            r"叫我\s*([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_\-·]{1,31})",
+            r"称呼我\s*([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9_\-·]{1,31})",
             r"\bmy name is\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
             r"\bi am called\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
             r"\bi'm called\s+([A-Za-z][A-Za-z0-9_\-]{1,31})\b",
@@ -142,7 +152,116 @@ class RuleBasedExtractor:
                     return candidate
         return None
 
+    def _extract_identity_facts(self, content: str) -> list[MemoryFactCandidate]:
+        facts: list[MemoryFactCandidate] = []
+        name = self._extract_identity_name(content)
+        if name:
+            facts.append(self._fact_from_content("identity", f"用户姓名是{name}", value=name))
+
+        for value, evidence in [
+            (self._extract_identity_role(content), "用户职业/角色是{}"),
+            (self._extract_identity_location(content), "用户所在地是{}"),
+            (self._extract_identity_timezone(content), "用户时区是{}"),
+            (self._extract_identity_language(content), "用户使用语言是{}"),
+        ]:
+            if value:
+                facts.append(self._fact_from_content("identity", evidence.format(value), value=value))
+        return facts
+
+    def _extract_identity_role(self, content: str) -> str | None:
+        patterns = [
+            r"(?:我的职业是|我的角色是|我从事|用户职业是|用户角色是|用户身份是)\s*([^，,。；;！!？?\n]{2,48})",
+            r"(?:我是|用户是)(?:一名|一位|一个)?\s*([^，,。；;！!？?\n]{2,48})",
+            r"\bmy role is\s+(?:a |an )?([^,.;!?\n]{2,48})",
+            r"\bi work as\s+(?:a |an )?([^,.;!?\n]{2,48})",
+            r"\b(?:the user|user)(?:'s)? role is\s+(?:a |an )?([^,.;!?\n]{2,48})",
+            r"\b(?:the user|user) works as\s+(?:a |an )?([^,.;!?\n]{2,48})",
+            r"\b(?:the user|user) is\s+(?:a |an )?([^,.;!?\n]{2,48})",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, content, flags=re.IGNORECASE)
+            if match:
+                candidate = self._trim_identity_candidate(match.group(1))
+                if self._looks_like_identity_role(candidate):
+                    return candidate
+        return None
+
+    def _extract_identity_location(self, content: str) -> str | None:
+        patterns = [
+            r"(?:我住在|我常驻|我位于|我的所在地是|我的城市是|用户住在|用户常驻|用户位于|用户所在地是|用户城市是)\s*([^，,。；;！!？?\n]{2,48})",
+            r"\bi(?:'m| am) based in\s+([^,.;!?\n]{2,48})",
+            r"\bi live in\s+([^,.;!?\n]{2,48})",
+            r"\bmy location is\s+([^,.;!?\n]{2,48})",
+            r"\b(?:the user|user) is based in\s+([^,.;!?\n]{2,48})",
+            r"\b(?:the user|user) lives in\s+([^,.;!?\n]{2,48})",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, content, flags=re.IGNORECASE)
+            if match:
+                candidate = self._trim_identity_candidate(match.group(1))
+                if self._looks_like_identity_place(candidate):
+                    return candidate
+        return None
+
+    def _extract_identity_timezone(self, content: str) -> str | None:
+        patterns = [
+            r"(?:我的时区是|用户时区是)\s*([^，,。；;！!？?\n]{2,32})",
+            r"\bmy timezone is\s+([^,.;!?\n]{2,32})",
+            r"\b(?:the user|user)(?:'s)? timezone is\s+([^,.;!?\n]{2,32})",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, content, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).strip(" 。.，,")
+        return None
+
+    def _extract_identity_language(self, content: str) -> str | None:
+        patterns = [
+            r"(?:我会说|我使用语言是|用户会说|用户使用语言是)\s*([^，,。；;！!？?\n]{2,48})",
+            r"\bi speak\s+([^,.;!?\n]{2,48})",
+            r"\b(?:the user|user) speaks\s+([^,.;!?\n]{2,48})",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, content, flags=re.IGNORECASE)
+            if match:
+                return match.group(1).strip(" 。.，,")
+        return None
+
+    def _trim_identity_candidate(self, candidate: str) -> str:
+        trimmed = candidate.strip(" 。.，,")
+        return re.split(r"\s+and\s+(?=(?:i|i'm|they|user|the user)\s+)", trimmed, maxsplit=1)[0].strip(" 。.，,")
+
     def _looks_like_identity_name(self, candidate: str) -> bool:
+        role_tokens = {
+            "工程师",
+            "开发",
+            "程序员",
+            "产品",
+            "设计",
+            "学生",
+            "老师",
+            "教师",
+            "创始",
+            "经理",
+            "研究",
+            "作者",
+            "运营",
+            "架构",
+            "developer",
+            "engineer",
+            "designer",
+            "student",
+            "teacher",
+            "founder",
+            "manager",
+            "researcher",
+            "writer",
+            "operator",
+            "consultant",
+        }
+        lower_candidate = candidate.lower()
+        if any(token in candidate or token in lower_candidate for token in role_tokens):
+            return False
         if re.fullmatch(r"[\u4e00-\u9fff]{2,8}", candidate):
             return not candidate.startswith(("一个", "一名", "个", "名"))
         non_names = {
@@ -164,12 +283,60 @@ class RuleBasedExtractor:
             "here",
             "not",
         }
-        if candidate.lower() in non_names:
+        if lower_candidate in non_names:
             return False
         return re.fullmatch(r"[A-Za-z][A-Za-z0-9_\-]{1,31}", candidate) is not None
 
+    def _looks_like_identity_role(self, candidate: str) -> bool:
+        lower = candidate.lower()
+        role_tokens = [
+            "工程师",
+            "开发",
+            "程序员",
+            "产品",
+            "设计",
+            "学生",
+            "老师",
+            "教师",
+            "创始",
+            "经理",
+            "研究",
+            "作者",
+            "运营",
+            "架构",
+            "developer",
+            "engineer",
+            "designer",
+            "student",
+            "teacher",
+            "founder",
+            "manager",
+            "researcher",
+            "writer",
+            "operator",
+            "consultant",
+        ]
+        if any(token in candidate or token in lower for token in role_tokens):
+            return True
+        if self._looks_like_identity_name(candidate):
+            return False
+        return False
+
+    def _looks_like_identity_place(self, candidate: str) -> bool:
+        lower = candidate.lower()
+        if len(candidate.strip()) < 2:
+            return False
+        if any(token in lower for token in ["doing", "working", "building", "using"]):
+            return False
+        return True
+
     def _stable_clauses(self, content: str) -> list[str]:
-        return [clause.strip() for clause in re.split(r"[，,。；;！!？?\n]+", content) if clause.strip()]
+        split_pattern = (
+            r"[，,。；;！!？?\n]+"
+            r"|\s+and\s+(?=(?:i|i'm|they|user|the user)\s+"
+            r"(?:like|likes|prefer|prefers|work|works|live|lives|speak|speaks|use|uses|usually|mainly|mostly|am|is)\b)"
+        )
+        return [clause.strip() for clause in re.split(split_pattern, content) if clause.strip()]
 
     def _dedupe_facts(self, facts: list[MemoryFactCandidate]) -> list[MemoryFactCandidate]:
         seen: set[tuple[str, str, str]] = set()
@@ -208,10 +375,42 @@ class RuleBasedExtractor:
     def _infer_fact_key(self, content: str, memory_type: str) -> str:
         lower = content.lower()
         if memory_type == "identity":
-            return "profile.identity.name"
+            if any(token in content for token in ["姓名", "名字", "叫"]) or any(
+                token in lower for token in ["name", "called", "call me"]
+            ):
+                return "profile.identity.name"
+            if any(token in content for token in ["职业", "角色", "身份", "从事"]) or any(
+                token in lower for token in ["role", "work as", "works as", "developer", "engineer", "designer", "student", "founder"]
+            ):
+                return "profile.identity.role"
+            if any(token in content for token in ["所在地", "城市", "住在", "常驻", "位于"]) or any(
+                token in lower for token in ["based in", "live in", "lives in", "location"]
+            ):
+                return "profile.identity.location"
+            if "时区" in content or "timezone" in lower:
+                return "profile.identity.timezone"
+            if any(token in content for token in ["语言", "会说"]) or "speak" in lower:
+                return "profile.identity.language"
+            return "profile.identity"
         if memory_type == "preference":
-            if any(token in content for token in ["喜欢", "感兴趣"]) or any(
-                token in lower for token in ["i like", "interested in"]
+            if any(token in content for token in ["喜欢", "感兴趣", "平时用", "常用", "主要用", "技术栈"]) or any(
+                token in lower
+                for token in [
+                    "i like",
+                    "i prefer",
+                    "they like",
+                    "they prefer",
+                    "user likes",
+                    "user prefers",
+                    "the user likes",
+                    "the user prefers",
+                    "interested in",
+                    "usually use",
+                    "mainly use",
+                    "mostly use",
+                    "usual stack",
+                    "my stack",
+                ]
             ):
                 return "preference.interests"
             return "general.preference"
@@ -233,8 +432,25 @@ class RuleBasedExtractor:
             patterns = [
                 r"\bi like\s+(.+)$",
                 r"\bi prefer\s+(.+)$",
+                r"\bthey like\s+(.+)$",
+                r"\bthey prefer\s+(.+)$",
+                r"\buser likes\s+(.+)$",
+                r"\buser prefers\s+(.+)$",
+                r"\bthe user likes\s+(.+)$",
+                r"\bthe user prefers\s+(.+)$",
+                r"\bi usually use\s+(.+)$",
+                r"\bi mainly use\s+(.+)$",
+                r"\bi mostly use\s+(.+)$",
+                r"\bmy usual stack is\s+(.+)$",
+                r"\bmy stack is\s+(.+)$",
+                r"\buser usually uses\s+(.+)$",
+                r"\bthe user usually uses\s+(.+)$",
                 r"我喜欢(.+)$",
                 r"我偏好(.+)$",
+                r"我平时用(.+)$",
+                r"我常用(.+)$",
+                r"我主要用(.+)$",
+                r"我的技术栈是(.+)$",
             ]
             for pattern in patterns:
                 match = re.search(pattern, stripped, flags=re.IGNORECASE)
@@ -242,22 +458,26 @@ class RuleBasedExtractor:
                     return match.group(1).strip(" 。.，,")
         return stripped.strip(" 。.，,")
 
+    def _is_project_decision(self, content: str) -> bool:
+        lower = content.lower()
+        return "项目决策" in content or "project decision" in lower
+
     def _infer_type(self, content: str) -> str:
         lower = content.lower()
-        if any(token in content for token in ["偏好", "喜欢", "不喜欢", "倾向", "更希望"]) or any(
-            token in lower for token in ["prefer", "preference", "like", "dislike"]
-        ):
-            return "preference"
         if any(token in content for token in ["回答风格", "风格", "语气"]) or "style" in lower:
             return "style"
         if any(token in content for token in ["目标", "希望能够", "计划", "下一步"]) or any(
             token in lower for token in ["goal", "plan", "next step"]
         ):
             return "goal"
-        if any(token in content for token in ["项目", "正在做", "正在设计", "MVP", "OS"]) or any(
+        if self._is_project_decision(content) or any(token in content for token in ["项目", "正在做", "正在设计", "MVP"]) or any(
             token in lower for token in ["project", "mvp"]
         ):
             return "project"
+        if any(token in content for token in ["偏好", "喜欢", "不喜欢", "倾向", "更希望", "平时用", "常用", "主要用", "技术栈"]) or any(
+            token in lower for token in ["prefer", "preference", "like", "dislike", "usually use", "mainly use", "mostly use", "usual stack", "my stack"]
+        ):
+            return "preference"
         if any(token in content for token in ["今天", "昨天", "最近", "刚刚"]):
             return "episodic"
         return "semantic"

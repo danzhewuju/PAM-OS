@@ -16,6 +16,7 @@ def test_mcp_lists_memory_tools(tmp_path):
     tool_names = {tool["name"] for tool in tools}
     assert "prepare_context" in tool_names
     assert "capture_memory" in tool_names
+    assert "observe_turn" in tool_names
     assert "get_profile" in tool_names
     assert "clear_memory" in tool_names
 
@@ -58,6 +59,31 @@ def test_mcp_calls_capture_and_prepare_context(tmp_path):
     assert "PAM-OS" in payload["package"]["content"]
     text_payload = json.loads(prepared["result"]["content"][0]["text"])
     assert text_payload["package"]["memory_ids"]
+
+
+def test_mcp_observe_turn_learns_policy_signal(tmp_path):
+    server = PamOsMcpServer(PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3"))
+
+    response = server.handle_message(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "observe_turn",
+                "arguments": {
+                    "user_message": "以后遇到这种情况，默认先给我两个方案再推荐一个。",
+                    "assistant_message": "好的。",
+                    "source_ref": "turn-1",
+                },
+            },
+        }
+    )
+
+    assert response is not None
+    payload = response["result"]["structuredContent"]
+    assert payload["policy_outcomes"][0]["decision"]["status"] == "active"
+    assert payload["policy_outcomes"][0]["signal"]["pattern"] == "feature:future_instruction"
 
 
 def test_mcp_rejects_unknown_tool(tmp_path):

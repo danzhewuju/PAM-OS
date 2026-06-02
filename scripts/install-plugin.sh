@@ -12,6 +12,7 @@ DEFAULT_MARKETPLACE_PATH="$HOME/.agents/plugins/marketplace.json"
 DEFAULT_CODEX_CONFIG="$DEFAULT_CODEX_HOME/config.toml"
 DEFAULT_CODEX_SKILL_DIR="$DEFAULT_CODEX_HOME/skills/$PLUGIN_NAME"
 DEFAULT_CLAUDE_SKILL_DIR="$HOME/.claude/skills/$PLUGIN_NAME"
+DEFAULT_CLAUDE_MCP_SCOPE="${PAM_OS_CLAUDE_MCP_SCOPE:-user}"
 DEFAULT_OPENCODE_AGENTS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/AGENTS.md"
 DEFAULT_HERMES_CONFIG="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
 DEFAULT_HERMES_AGENTS_FILE="${HERMES_HOME:-$HOME/.hermes}/AGENTS.md"
@@ -48,7 +49,7 @@ Usage:
 Options:
   --target TARGET      Install target: codex, claude, opencode, hermes, or all. Can be repeated.
   --codex             Install the Codex plugin, global skill fallback, and MCP config.
-  --claude            Install the Claude Code global skill.
+  --claude            Install the Claude Code global skill and MCP config.
   --opencode          Install OpenCode compatibility guidance and Claude-compatible skill.
   --hermes            Install Hermes MCP config and guidance.
   --all               Install all supported targets.
@@ -57,6 +58,8 @@ Options:
   --codex-config PATH   Codex config.toml path. Default: ~/.codex/config.toml.
   --claude-skill-dir DIR
                       Claude Code skill dir. Default: ~/.claude/skills/pam-os-memory.
+  --claude-mcp-scope SCOPE
+                      Claude Code MCP scope. Default: user.
   --opencode-agents PATH
                       OpenCode AGENTS.md path. Default: ~/.config/opencode/AGENTS.md.
   --hermes-config PATH
@@ -73,7 +76,7 @@ Options:
   --source DIR          Existing pam-os-memory plugin source directory for dev/local installs.
   --codex-skill-dir DIR Install the Codex global skill fallback here. Default: ~/.codex/skills/pam-os-memory.
   --skip-marketplace    Do not create or update the personal plugin marketplace entry.
-  --skip-mcp-config     Do not register the MCP server in Codex config.toml.
+  --skip-mcp-config     Do not register MCP servers in client configs.
   --skip-global-skill   Do not install the Codex global skill fallback.
   --no-init             Skip running "memory init" after install.
   --yes                 Replace an existing plugin install without prompting.
@@ -88,6 +91,10 @@ repo, writes a marketplace entry for Codex plugin discovery, and unless
   <uv-bin> --directory <managed-repo-dir> run --python <version> memory --db <db> mcp
 If uv is unavailable, the installer falls back to:
   PYTHONPATH=<managed-repo-dir>/src <python> -m pam_os.mcp --db <db>
+
+The Claude target installs the global skill and, unless --skip-mcp-config is
+passed, registers the same stdio MCP server with:
+  claude mcp add-json --scope <scope> pam_os_memory '<json>'
 
 Pass --repo-dir or --source only for local development installs.
 
@@ -170,7 +177,7 @@ select_install_targets() {
 
   printf '\nInstall targets:\n'
   printf '  1) codex     - Codex plugin + MCP + global skill fallback\n'
-  printf '  2) claude    - Claude Code global skill (%s)\n' "$CLAUDE_SKILL_DIR"
+  printf '  2) claude    - Claude Code global skill + MCP (%s)\n' "$CLAUDE_SKILL_DIR"
   printf '  3) opencode  - OpenCode guidance (%s)\n' "$OPENCODE_AGENTS_FILE"
   printf '  4) hermes    - Hermes MCP config + guidance (%s)\n' "$HERMES_CONFIG"
   printf '  5) all\n'
@@ -297,6 +304,26 @@ find_uv_bin() {
       return 0
     fi
   done
+
+  return 1
+}
+
+find_claude_bin() {
+  local candidate
+
+  if [[ -n "${PAM_OS_CLAUDE_BIN:-}" ]]; then
+    if [[ -x "$PAM_OS_CLAUDE_BIN" ]]; then
+      abs_path "$PAM_OS_CLAUDE_BIN"
+      return 0
+    fi
+    return 1
+  fi
+
+  candidate="$(type -P claude || true)"
+  if [[ -n "$candidate" && -x "$candidate" ]]; then
+    abs_path "$candidate"
+    return 0
+  fi
 
   return 1
 }
@@ -508,6 +535,42 @@ Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", 
 JSON_WRITER
 }
 
+build_claude_mcp_json() {
+  $PYTHON_BIN - "$MCP_COMMAND" "$MCP_ENV_JSON" "${MCP_ARGS[@]}" <<'JSON_WRITER'
+import json
+import sys
+
+command, env_json, *args = sys.argv[1:]
+payload = {
+    "command": command,
+    "args": args,
+    "env": json.loads(env_json),
+}
+print(json.dumps(payload, ensure_ascii=False))
+JSON_WRITER
+}
+
+write_claude_mcp_config() {
+  local claude_bin payload
+
+  claude_bin="$(find_claude_bin || true)"
+  if [[ -z "$claude_bin" ]]; then
+    warn "Could not find claude CLI; skipped Claude MCP registration."
+    warn "Run manually later: claude mcp add-json --scope $CLAUDE_MCP_SCOPE $MCP_SERVER_NAME '<json>'"
+    return 0
+  fi
+
+  payload="$(build_claude_mcp_json)"
+  info "Registering Claude MCP server '$MCP_SERVER_NAME' with scope '$CLAUDE_MCP_SCOPE'"
+  "$claude_bin" mcp remove --scope "$CLAUDE_MCP_SCOPE" "$MCP_SERVER_NAME" >/dev/null 2>&1 || true
+  if "$claude_bin" mcp add-json --scope "$CLAUDE_MCP_SCOPE" "$MCP_SERVER_NAME" "$payload"; then
+    return 0
+  fi
+
+  warn "Failed to register Claude MCP server '$MCP_SERVER_NAME'."
+  warn "Run manually later: claude mcp add-json --scope $CLAUDE_MCP_SCOPE $MCP_SERVER_NAME '$payload'"
+}
+
 
 write_skill_config() {
   local path="$1"
@@ -661,6 +724,10 @@ append_managed_guidance() {
 install_claude() {
   local src="$1"
   install_global_skill "$src" "$CLAUDE_SKILL_DIR" "Claude Code global skill"
+
+  if [[ "$WRITE_MCP_CONFIG" == "1" ]]; then
+    write_claude_mcp_config
+  fi
 }
 
 install_opencode() {
@@ -758,9 +825,11 @@ install_hermes() {
   local skill_src="$1"
 
   info "Installing Hermes compatibility"
-  write_hermes_mcp_config "$HERMES_CONFIG"
+  if [[ "$WRITE_MCP_CONFIG" == "1" ]]; then
+    write_hermes_mcp_config "$HERMES_CONFIG"
+    printf 'Updated: %s\n' "$HERMES_CONFIG"
+  fi
   append_managed_guidance "$HERMES_AGENTS_FILE" "$skill_src/SKILL.md"
-  printf 'Updated: %s\n' "$HERMES_CONFIG"
   printf 'Updated: %s\n' "$HERMES_AGENTS_FILE"
 }
 
@@ -911,6 +980,7 @@ MARKETPLACE_PATH="$DEFAULT_MARKETPLACE_PATH"
 CODEX_CONFIG="$DEFAULT_CODEX_CONFIG"
 CODEX_SKILL_DIR="$DEFAULT_CODEX_SKILL_DIR"
 CLAUDE_SKILL_DIR="$DEFAULT_CLAUDE_SKILL_DIR"
+CLAUDE_MCP_SCOPE="$DEFAULT_CLAUDE_MCP_SCOPE"
 OPENCODE_AGENTS_FILE="$DEFAULT_OPENCODE_AGENTS_FILE"
 HERMES_CONFIG="$DEFAULT_HERMES_CONFIG"
 HERMES_AGENTS_FILE="$DEFAULT_HERMES_AGENTS_FILE"
@@ -977,6 +1047,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --claude-skill-dir)
       CLAUDE_SKILL_DIR="${2:-}"
+      shift 2
+      ;;
+    --claude-mcp-scope)
+      CLAUDE_MCP_SCOPE="${2:-}"
       shift 2
       ;;
     --opencode-agents)
@@ -1064,6 +1138,7 @@ done
 [[ -n "$CODEX_CONFIG" ]] || die "--codex-config must not be empty."
 [[ -n "$CODEX_SKILL_DIR" ]] || die "--codex-skill-dir must not be empty."
 [[ -n "$CLAUDE_SKILL_DIR" ]] || die "--claude-skill-dir must not be empty."
+[[ -n "$CLAUDE_MCP_SCOPE" ]] || die "--claude-mcp-scope must not be empty."
 [[ -n "$OPENCODE_AGENTS_FILE" ]] || die "--opencode-agents must not be empty."
 [[ -n "$HERMES_CONFIG" ]] || die "--hermes-config must not be empty."
 [[ -n "$HERMES_AGENTS_FILE" ]] || die "--hermes-agents must not be empty."
@@ -1163,7 +1238,7 @@ cat <<SUMMARY
 
 Next checks:
   Codex:   restart Codex, list skills, and verify the pam_os_memory MCP server.
-  Claude:  restart Claude Code, then list skills or invoke /pam-os-memory.
+  Claude:  restart Claude Code, run /mcp, then list skills or invoke /pam-os-memory.
   OpenCode: restart opencode so it reloads AGENTS.md guidance.
   Hermes:  restart Hermes and verify the pam_os_memory MCP server is listed.
 

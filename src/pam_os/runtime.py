@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from pam_os.adaptive_learning import AdaptiveLearningLoop, ObservedTurnResult, PolicyLearningOutcome
 from pam_os.adaptive_policy import AdaptiveMemoryPolicy, PolicySignalLearner
 from pam_os.config import AppConfig, default_db_path, load_config
 from pam_os.context import ContextCompiler
@@ -30,6 +31,7 @@ class PersonalMemoryRuntime:
         self.extractor = extractor or RuleBasedExtractor()
         self.compiler = ContextCompiler()
         self.policy_learner = PolicySignalLearner(self.store)
+        self.adaptive_learning_loop = AdaptiveLearningLoop()
         policy = policy or AdaptiveMemoryPolicy(self.store, config=self.config.orchestrator)
         self.orchestrator = MemoryOrchestrator(
             self.store,
@@ -375,6 +377,95 @@ class PersonalMemoryRuntime:
             statuses=statuses,
             limit=limit,
         )
+
+    def observe_turn(
+        self,
+        *,
+        user_message: str,
+        assistant_message: str = "",
+        conversation_summary: str | None = None,
+        source_ref: str | None = None,
+        auto_capture: bool = True,
+        auto_learn_policy: bool = True,
+    ) -> ObservedTurnResult:
+        if not user_message.strip():
+            raise ValueError("user_message must not be empty")
+
+        trace_id = new_id("trc")
+        capture_risk = self.adaptive_learning_loop.admission_controller.risk_for_text(user_message)
+        memory_captures: list[CaptureResult] = []
+        if auto_capture and capture_risk != "high":
+            capture = self.capture_memory(
+                user_message,
+                source="conversation",
+                source_ref=source_ref,
+                metadata={"observed_turn": True},
+            )
+            memory_captures.append(capture)
+
+        outcomes: list[PolicyLearningOutcome] = []
+        if auto_learn_policy:
+            for candidate in self.adaptive_learning_loop.policy_candidates(
+                user_message=user_message,
+                assistant_message=assistant_message,
+                conversation_summary=conversation_summary,
+            ):
+                decision = self.adaptive_learning_loop.admission_for(candidate)
+                signal = None
+                if decision.allow and decision.status in {"candidate", "active", "stable"}:
+                    signal = self.policy_learner.learn_signal(
+                        signal_type=candidate.signal_type,
+                        pattern=candidate.pattern,
+                        normalized_intent=candidate.normalized_intent,
+                        action=candidate.action,
+                        scope=candidate.scope,
+                        confidence=decision.confidence,
+                        source=candidate.source,
+                        status=decision.status,
+                    )
+                outcomes.append(PolicyLearningOutcome(candidate=candidate, decision=decision, signal=signal))
+                self._record_quality_trace(
+                    trace_id=trace_id,
+                    operation="learn_policy_signal",
+                    stage="admission",
+                    input_summary=candidate.source_text,
+                    provider=type(self.adaptive_learning_loop.admission_controller).__name__,
+                    decision=decision.status if decision.allow else "skipped",
+                    confidence=decision.confidence,
+                    signals=decision.signals,
+                    related_ids=[signal.id] if signal else [],
+                    metrics={
+                        "risk": decision.risk,
+                        "reason": decision.reason,
+                        "pattern": candidate.pattern,
+                        "normalized_intent": candidate.normalized_intent,
+                        "signal_type": candidate.signal_type,
+                        "action": candidate.action,
+                        "scope": candidate.scope,
+                        "source_ref": source_ref,
+                    },
+                )
+
+        self._record_quality_trace(
+            trace_id=trace_id,
+            operation="observe_turn",
+            stage="complete",
+            input_summary=user_message,
+            provider=type(self.adaptive_learning_loop).__name__,
+            decision="observed",
+            related_ids=[outcome.signal.id for outcome in outcomes if outcome.signal],
+            metrics={
+                "memory_capture_count": len(memory_captures),
+                "policy_candidate_count": len(outcomes),
+                "policy_signal_count": len([outcome for outcome in outcomes if outcome.signal]),
+                "auto_capture": auto_capture,
+                "auto_learn_policy": auto_learn_policy,
+                "source_ref": source_ref,
+                "capture_risk": capture_risk,
+                "auto_capture_skipped_high_risk": auto_capture and capture_risk == "high",
+            },
+        )
+        return ObservedTurnResult(memory_captures=memory_captures, policy_outcomes=outcomes)
 
     def reflect(self, *, recent: int = 50) -> ContextPackage:
         memories = self.store.recent_memories(limit=recent)

@@ -31,6 +31,7 @@ class PamOsMcpServer:
             "prepare_context": self._prepare_context,
             "capture_memory": self._capture_memory,
             "record_behavior_choice": self._record_behavior_choice,
+            "observe_turn": self._observe_turn,
             "consolidate_memory": self._consolidate_memory,
             "get_profile": self._get_profile,
             "search_memory": self._search_memory,
@@ -132,6 +133,16 @@ class PamOsMcpServer:
             deferred=_optional_str_list(arguments, "deferred"),
             reason=_optional_str(arguments, "reason"),
             source_ref=_optional_str(arguments, "source_ref"),
+        )
+
+    def _observe_turn(self, arguments: dict[str, Any]) -> Any:
+        return self.runtime.observe_turn(
+            user_message=_required_str(arguments, "user_message"),
+            assistant_message=_optional_str(arguments, "assistant_message") or "",
+            conversation_summary=_optional_str(arguments, "conversation_summary"),
+            source_ref=_optional_str(arguments, "source_ref"),
+            auto_capture=bool(arguments.get("auto_capture", True)),
+            auto_learn_policy=bool(arguments.get("auto_learn_policy", True)),
         )
 
     def _consolidate_memory(self, arguments: dict[str, Any]) -> Any:
@@ -250,6 +261,23 @@ def tool_definitions() -> list[dict[str, Any]]:
                     "source_ref": {"type": "string"},
                 },
                 "required": ["context"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "observe_turn",
+            "description": "Observe a completed chat turn and apply conservative automatic memory/policy learning with audit traces.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "user_message": {"type": "string"},
+                    "assistant_message": {"type": "string"},
+                    "conversation_summary": {"type": "string"},
+                    "source_ref": {"type": "string"},
+                    "auto_capture": {"type": "boolean", "default": True},
+                    "auto_learn_policy": {"type": "boolean", "default": True},
+                },
+                "required": ["user_message"],
                 "additionalProperties": False,
             },
         },
