@@ -710,7 +710,7 @@ def test_capture_auto_consolidates_after_threshold(tmp_path):
     traits = runtime.get_user_profile()
     trait_keys = {trait.trait_key for trait in traits}
 
-    assert "general.preference" in trait_keys
+    assert "preference.technical.local_first" in trait_keys
     assert "communication.answer_style" in trait_keys
 
 
@@ -739,10 +739,127 @@ def test_behavior_choice_consolidates_into_profile_trait(tmp_path):
     )
 
     result = runtime.consolidate_memory(recent=100)
-    traits = runtime.get_user_profile(query="Personal AI Memory OS 技术路线")
+    traits = runtime.store.list_profile_traits(status="weak", query="PAM-OS 技术路线")
 
     assert result.evidence_created
-    assert any(trait.trait_key == "general.decision_style" for trait in traits)
+    assert any(trait.trait_key == "technical.decision_style" for trait in traits)
+
+
+def test_generic_preference_starts_as_weak_profile_trait(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    runtime.remember(
+        """
+        {
+          "type": "preference",
+          "content": "用户偏好表达清楚。",
+          "importance": 0.7,
+          "confidence": 0.7
+        }
+        """
+    )
+
+    result = runtime.consolidate_memory(recent=100)
+    weak_traits = runtime.store.list_profile_traits(status="weak")
+
+    assert result.evidence_created
+    assert any(trait.trait_key == "general.preference" for trait in weak_traits)
+
+
+def test_repeated_weak_profile_evidence_promotes_to_active(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    runtime.remember(
+        """
+        {
+          "type": "preference",
+          "content": "用户偏好表达清楚。",
+          "importance": 0.7,
+          "confidence": 0.7
+        }
+        """
+    )
+    runtime.consolidate_memory(recent=100)
+    runtime.remember(
+        """
+        {
+          "type": "preference",
+          "content": "用户偏好表达要清楚。",
+          "importance": 0.7,
+          "confidence": 0.7
+        }
+        """
+    )
+    runtime.consolidate_memory(recent=100)
+
+    active_traits = runtime.get_user_profile()
+
+    assert any(
+        trait.trait_key == "general.preference" and trait.evidence_count == 2
+        for trait in active_traits
+    )
+
+
+def test_contradictory_profile_evidence_marks_trait_contradicted(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    runtime.remember(
+        """
+        {
+          "type": "preference",
+          "content": "用户偏好表达清楚。",
+          "importance": 0.7,
+          "confidence": 0.7
+        }
+        """
+    )
+    runtime.consolidate_memory(recent=100)
+    runtime.remember(
+        """
+        {
+          "type": "preference",
+          "content": "用户不喜欢表达清楚。",
+          "importance": 0.7,
+          "confidence": 0.7
+        }
+        """
+    )
+    runtime.consolidate_memory(recent=100)
+
+    contradicted_traits = runtime.store.list_profile_traits(status="contradicted")
+
+    assert any(trait.trait_key == "general.preference" for trait in contradicted_traits)
+
+
+def test_archive_correction_marks_profile_trait_archived(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    runtime.remember(
+        """
+        {
+          "type": "preference",
+          "content": "用户偏好表达清楚。",
+          "importance": 0.7,
+          "confidence": 0.7
+        }
+        """
+    )
+    runtime.consolidate_memory(recent=100)
+    runtime.remember(
+        """
+        {
+          "type": "preference",
+          "content": "纠正：用户不再偏好表达清楚。",
+          "importance": 0.7,
+          "confidence": 0.7
+        }
+        """
+    )
+    runtime.consolidate_memory(recent=100)
+
+    archived_traits = runtime.store.list_profile_traits(status="archived")
+
+    assert any(trait.trait_key == "general.preference" for trait in archived_traits)
 
 
 def test_prepare_context_includes_profile_traits(tmp_path):
@@ -967,13 +1084,13 @@ def test_version_cli_outputs_current_version(capsys):
 
 
 def test_update_check_cli_compares_versions_offline(capsys):
-    exit_code = main(["update-check", "--latest-version", "v0.2.1", "--json"])
+    exit_code = main(["update-check", "--latest-version", "v0.2.2", "--json"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert exit_code == 0
     assert payload["current_version"] == __version__
-    assert payload["latest_version"] == "0.2.1"
+    assert payload["latest_version"] == "0.2.2"
     assert payload["update_available"] is True
 
 

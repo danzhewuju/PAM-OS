@@ -482,6 +482,7 @@ class TraitCandidate:
     evidence_type: str
     evidence_content: str
     confidence: float
+    initial_status: str = "active"
 
 
 class RuleProfileConsolidator:
@@ -543,8 +544,12 @@ class RuleProfileConsolidator:
             )
 
         if memory.type == "preference":
-            trait_key = fact_key or "general.preference"
-            scope = "preferences" if trait_key.startswith("preference.") else "general"
+            trait_key = (
+                fact_key
+                if fact_key and fact_key != "general.preference"
+                else self._trait_key_from_memory_content(memory)
+            )
+            scope = self._scope_from_trait_key(trait_key)
             return self._trait_candidate(memory, trait_type="preference", trait_key=trait_key, scope=scope)
 
         if memory.type == "style":
@@ -556,16 +561,22 @@ class RuleProfileConsolidator:
             )
 
         if memory.type == "goal":
+            trait_key = fact_key or self._trait_key_from_memory_content(memory)
             return self._trait_candidate(
                 memory,
                 trait_type="goal",
-                trait_key=fact_key or "long_term.goal",
+                trait_key=trait_key,
                 scope="goals",
             )
 
         if memory.type == "project":
-            trait_key = fact_key or "project.active_context"
-            return self._trait_candidate(memory, trait_type="project", trait_key=trait_key, scope="project")
+            trait_key = fact_key or self._trait_key_from_memory_content(memory)
+            return self._trait_candidate(
+                memory,
+                trait_type="project",
+                trait_key=trait_key,
+                scope=self._scope_from_trait_key(trait_key),
+            )
 
         return None
 
@@ -577,14 +588,16 @@ class RuleProfileConsolidator:
         trait_key: str,
         scope: str,
     ) -> TraitCandidate:
+        evidence_type = self._evidence_type_from_memory(memory)
         return TraitCandidate(
             trait_type=trait_type,
             trait_key=trait_key,
             statement=self._clean_statement(memory.content),
             scope=scope,
-            evidence_type="explicit_statement",
+            evidence_type=evidence_type,
             evidence_content=memory.content,
             confidence=memory.confidence,
+            initial_status=self._initial_trait_status(memory, trait_key, evidence_type),
         )
 
     def _fact_key_from_memory(self, memory: Memory) -> str | None:
@@ -595,17 +608,19 @@ class RuleProfileConsolidator:
         return None
 
     def _candidate_from_behavior_event(self, event: BehaviorEvent) -> TraitCandidate | None:
-        if event.chosen:
-            return TraitCandidate(
-                trait_type="decision_style",
-                trait_key="general.decision_style",
-                statement=f"用户在“{event.context}”中选择了 {', '.join(event.chosen)}。",
-                scope="general",
-                evidence_type="behavior_choice",
-                evidence_content=self._behavior_evidence_text(event),
-                confidence=0.62,
-            )
-        return None
+        if not (event.chosen or event.rejected or event.deferred):
+            return None
+        trait_key = self._trait_key_from_behavior_event(event)
+        return TraitCandidate(
+            trait_type="decision_style",
+            trait_key=trait_key,
+            statement=self._behavior_trait_statement(event),
+            scope=self._scope_from_trait_key(trait_key),
+            evidence_type="behavior_choice",
+            evidence_content=self._behavior_evidence_text(event),
+            confidence=0.62,
+            initial_status="weak",
+        )
 
     def _evidence_from_candidate(
         self,
@@ -646,7 +661,7 @@ class RuleProfileConsolidator:
                 confidence=candidate.confidence,
                 evidence_count=1,
                 evidence_ids=[evidence.id],
-                status="active",
+                status=candidate.initial_status,
                 first_seen_at=timestamp,
                 last_confirmed_at=timestamp,
                 updated_at=timestamp,
@@ -656,6 +671,7 @@ class RuleProfileConsolidator:
         evidence_count = existing.evidence_count + 1
         confidence = min(self.config.max_confidence, max(existing.confidence, candidate.confidence) + 0.04)
         stability = min(self.config.max_stability, existing.stability + self.config.stability_increment)
+        status = self._merged_trait_status(existing, candidate, evidence_count, confidence)
         return ProfileTrait(
             id=existing.id,
             trait_type=existing.trait_type,
@@ -666,10 +682,128 @@ class RuleProfileConsolidator:
             confidence=confidence,
             evidence_count=evidence_count,
             evidence_ids=evidence_ids[-20:],
-            status="active",
+            status=status,
             first_seen_at=existing.first_seen_at,
             last_confirmed_at=timestamp,
             updated_at=timestamp,
+        )
+
+    def _trait_key_from_memory_content(self, memory: Memory) -> str:
+        text = memory.content
+        lower = text.lower()
+        if memory.type == "preference":
+            if any(token in text for token in ["本地", "可控", "开源", "自托管", "轻量"]) or any(
+                token in lower for token in ["self-host", "self hosted", "local-first", "local first", "open source"]
+            ):
+                return "preference.technical.local_first"
+            if any(token in text for token in ["自动", "确认", "记忆写入", "捕获", "读写记忆"]) or any(
+                token in lower for token in ["memory capture", "auto capture", "automatic memory"]
+            ):
+                return "workflow.memory_capture"
+            if any(token in text for token in ["直接", "工程化", "可执行", "少营销"]) or any(
+                token in lower for token in ["direct", "engineering-focused", "engineering focused", "actionable"]
+            ):
+                return "communication.answer_style"
+            return "general.preference"
+        if memory.type == "goal":
+            return "long_term.goal"
+        if memory.type == "project":
+            if any(token in text for token in ["决定", "先用", "不引入", "技术路线"]) or any(
+                token in lower for token in ["decided", "decision", "will use", "should use", "not introduce"]
+            ):
+                return "project.technical_decision"
+            return "project.active_context"
+        return f"memory.{memory.type}"
+
+    def _trait_key_from_behavior_event(self, event: BehaviorEvent) -> str:
+        text = self._behavior_evidence_text(event)
+        lower = text.lower()
+        if any(token in text for token in ["技术", "SQLite", "Qdrant", "Neo4j", "架构", "MVP"]) or any(
+            token in lower for token in ["sqlite", "qdrant", "neo4j", "architecture", "technical"]
+        ):
+            return "technical.decision_style"
+        if any(token in text for token in ["工作流", "默认", "自动", "确认", "流程"]) or any(
+            token in lower for token in ["workflow", "default", "automatic", "confirmation"]
+        ):
+            return "workflow.decision_style"
+        return "general.decision_style"
+
+    def _scope_from_trait_key(self, trait_key: str) -> str:
+        if trait_key.startswith(("technical.", "preference.technical.")):
+            return "technical"
+        if trait_key.startswith("communication."):
+            return "communication"
+        if trait_key.startswith("workflow."):
+            return "workflow"
+        if trait_key.startswith("project."):
+            return "project"
+        if trait_key.startswith("long_term."):
+            return "goals"
+        if trait_key.startswith("preference."):
+            return "preferences"
+        return "general"
+
+    def _evidence_type_from_memory(self, memory: Memory) -> str:
+        text = memory.content
+        lower = text.lower()
+        if any(token in text for token in ["纠正", "不是", "别这么", "不要这样", "不再"]) or any(
+            token in lower
+            for token in ["correction", "actually", "not that", "don't do that", "do not do that", "no longer"]
+        ):
+            return "correction"
+        return "explicit_statement"
+
+    def _initial_trait_status(self, memory: Memory, trait_key: str, evidence_type: str) -> str:
+        if evidence_type == "correction" and self._requests_archive(memory.content):
+            return "archived"
+        if evidence_type == "correction":
+            return "active"
+        if memory.type == "identity":
+            return "active"
+        if any(tag.startswith("fact:") for tag in memory.tags) and memory.confidence >= 0.7:
+            return "active"
+        if trait_key in {"general.preference", "general.decision_style"}:
+            return "weak"
+        return "active"
+
+    def _merged_trait_status(
+        self,
+        existing: ProfileTrait,
+        candidate: TraitCandidate,
+        evidence_count: int,
+        confidence: float,
+    ) -> str:
+        if existing.status == "archived":
+            return "archived"
+        if candidate.evidence_type == "correction" and self._requests_archive(candidate.statement):
+            return "archived"
+        if candidate.evidence_type == "correction":
+            return "active"
+        if self._looks_contradictory(existing.statement, candidate.statement):
+            return "contradicted"
+        if confidence >= 0.68 and evidence_count >= 2:
+            return "active"
+        return existing.status if existing.status in {"active", "contradicted"} else candidate.initial_status
+
+    def _looks_contradictory(self, existing: str, candidate: str) -> bool:
+        existing_negative = self._has_negation(existing)
+        candidate_negative = self._has_negation(candidate)
+        if existing_negative == candidate_negative:
+            return False
+        existing_terms = set(_content_words(existing))
+        candidate_terms = set(_content_words(candidate))
+        return bool(existing_terms & candidate_terms)
+
+    def _has_negation(self, text: str) -> bool:
+        lower = text.lower()
+        return any(token in text for token in ["不喜欢", "不想", "不要", "不希望", "别"]) or any(
+            token in lower for token in ["don't", "do not", "not prefer", "dislike"]
+        )
+
+    def _requests_archive(self, text: str) -> bool:
+        lower = text.lower()
+        return any(token in text for token in ["不再", "过期", "废弃", "撤销"]) or any(
+            token in lower for token in ["no longer", "outdated", "archive", "archived", "revoke"]
         )
 
     def _clean_statement(self, text: str) -> str:
@@ -689,6 +823,19 @@ class RuleProfileConsolidator:
         if event.reason:
             parts.append(f"理由：{event.reason}")
         return "；".join(parts)
+
+    def _behavior_trait_statement(self, event: BehaviorEvent) -> str:
+        parts = [f"用户在“{event.context}”中"]
+        if event.chosen:
+            parts.append(f"选择了 {', '.join(event.chosen)}")
+        if event.rejected:
+            parts.append(f"拒绝了 {', '.join(event.rejected)}")
+        if event.deferred:
+            parts.append(f"推迟了 {', '.join(event.deferred)}")
+        statement = "，".join(parts) + "。"
+        if event.reason:
+            statement += f"理由：{event.reason}"
+        return statement
 
     def _dedupe_traits(self, traits: list[ProfileTrait]) -> list[ProfileTrait]:
         by_key: dict[str, ProfileTrait] = {}
@@ -747,3 +894,21 @@ def _recency_score(updated_at: str, now: datetime) -> float:
         return 0.3
     age_days = max(0.0, (now - updated).total_seconds() / 86400)
     return math.exp(-age_days / 30)
+
+
+def _content_words(text: str) -> list[str]:
+    normalized = (
+        text.lower()
+        .replace("，", " ")
+        .replace("。", " ")
+        .replace("、", " ")
+        .replace("：", " ")
+        .replace("；", " ")
+        .replace("/", " ")
+    )
+    words = [word for word in normalized.split() if len(word) >= 2]
+    words.extend(re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,}", normalized))
+    for keyword in ["本地", "可控", "轻量", "工程", "自动", "确认", "记忆", "直接", "开源", "表达", "清楚"]:
+        if keyword in text:
+            words.append(keyword)
+    return _dedupe_strings(words)

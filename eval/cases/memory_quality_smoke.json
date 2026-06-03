@@ -105,7 +105,7 @@
       },
       "expected": {
         "trait_keys": [
-          "general.preference"
+          "preference.technical.local_first"
         ],
         "must_include": [
           "self-host"

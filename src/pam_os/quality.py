@@ -56,7 +56,7 @@ def load_quality_cases(paths: list[str | Path]) -> list[dict[str, Any]]:
 
 
 def _evaluate_case(case: dict[str, Any], *, config: AppConfig | None) -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix="pam-os-eval-") as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="pam-os-eval-", ignore_cleanup_errors=True) as tmp_dir:
         runtime = PersonalMemoryRuntime(db_path=Path(tmp_dir) / "memory.sqlite3", config=config)
         _apply_setup(runtime, case.get("setup", {}))
         case_type = case.get("type")
