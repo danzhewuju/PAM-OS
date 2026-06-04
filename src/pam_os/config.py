@@ -51,6 +51,24 @@ class RetrievalConfig:
 
 
 @dataclass(frozen=True)
+class ExtractionConfig:
+    provider: str = "rule"
+
+
+@dataclass(frozen=True)
+class LlmProviderConfig:
+    enabled: bool = False
+    model: str = ""
+    api_key_env: str = "OPENAI_API_KEY"
+    timeout_seconds: int = 8
+
+
+@dataclass(frozen=True)
+class ProvidersConfig:
+    llm: LlmProviderConfig = field(default_factory=LlmProviderConfig)
+
+
+@dataclass(frozen=True)
 class ProfileConfig:
     default_limit: int = 20
 
@@ -63,6 +81,8 @@ class AppConfig:
     consolidation: ConsolidationConfig = field(default_factory=ConsolidationConfig)
     orchestrator: OrchestratorConfig = field(default_factory=OrchestratorConfig)
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
+    extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
+    providers: ProvidersConfig = field(default_factory=ProvidersConfig)
     profile: ProfileConfig = field(default_factory=ProfileConfig)
     config_path: Path | None = None
 
@@ -81,6 +101,8 @@ def load_config(config_path: Path | str | None = None) -> AppConfig:
         consolidation=ConsolidationConfig(**_section(data, "consolidation")),
         orchestrator=OrchestratorConfig(**_section(data, "orchestrator")),
         retrieval=RetrievalConfig(**_section(data, "retrieval")),
+        extraction=ExtractionConfig(**_section(data, "extraction")),
+        providers=_providers_config(data),
         profile=ProfileConfig(**_section(data, "profile")),
         config_path=path if path and path.exists() else None,
     )
@@ -125,9 +147,19 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
         consolidation=config.consolidation,
         orchestrator=config.orchestrator,
         retrieval=config.retrieval,
+        extraction=config.extraction,
+        providers=config.providers,
         profile=config.profile,
         config_path=config.config_path,
     )
+
+
+def _providers_config(data: dict[str, Any]) -> ProvidersConfig:
+    providers = _section(data, "providers")
+    llm = providers.get("llm", {})
+    if not isinstance(llm, dict):
+        raise ValueError("config section [providers.llm] must be a table")
+    return ProvidersConfig(llm=LlmProviderConfig(**llm))
 
 
 def _env_bool(name: str, default: bool) -> bool:

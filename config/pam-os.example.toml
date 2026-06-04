@@ -61,6 +61,18 @@ candidate_multiplier = 3
 # Maximum query terms extracted for SQLite FTS/LIKE search.
 max_query_terms = 12
 
+[extraction]
+# Memory extractor provider. The default rule provider is local, deterministic,
+# and dependency-free. The llm provider is optional and falls back to rules.
+provider = "rule"
+
+[providers.llm]
+# Reserved for optional LLM-backed extraction providers.
+enabled = false
+model = ""
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 8
+
 [profile]
 # Default number of profile traits returned by `memory profile`.
 default_limit = 20

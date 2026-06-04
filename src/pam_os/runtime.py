@@ -8,6 +8,7 @@ from pam_os.adaptive_policy import AdaptiveMemoryPolicy, PolicySignalLearner
 from pam_os.config import AppConfig, default_db_path, load_config
 from pam_os.context import ContextCompiler
 from pam_os.extractor import RuleBasedExtractor
+from pam_os.llm_extractor import LlmExtractionClient, LlmMemoryExtractor
 from pam_os.models import BehaviorEvent, CaptureResult, ContextPackage, Event, Memory, QualityTrace, SearchResult, StorageStats, new_id
 from pam_os.orchestrator import ContextBudget, MemoryOrchestrator
 from pam_os.providers import MemoryExtractor, MemoryPolicy, MemoryReranker, MemoryRetriever, ProfileConsolidator
@@ -25,10 +26,11 @@ class PersonalMemoryRuntime:
         reranker: MemoryReranker | None = None,
         consolidator: ProfileConsolidator | None = None,
         config: AppConfig | None = None,
+        llm_extraction_client: LlmExtractionClient | None = None,
     ):
         self.config = config or load_config()
         self.store = MemoryStore(db_path or default_db_path(self.config), retrieval_config=self.config.retrieval)
-        self.extractor = extractor or RuleBasedExtractor()
+        self.extractor = extractor or self._default_extractor(llm_extraction_client)
         self.compiler = ContextCompiler()
         self.policy_learner = PolicySignalLearner(self.store)
         self.adaptive_learning_loop = AdaptiveLearningLoop()
@@ -43,6 +45,12 @@ class PersonalMemoryRuntime:
             reranker=reranker,
         )
         self.consolidator = consolidator or RuleProfileConsolidator(self.store, config=self.config.consolidation)
+
+    def _default_extractor(self, llm_extraction_client: LlmExtractionClient | None) -> MemoryExtractor:
+        extraction_provider = self.config.extraction.provider.strip().lower()
+        if extraction_provider == "llm" and self.config.providers.llm.enabled and llm_extraction_client is not None:
+            return LlmMemoryExtractor(llm_extraction_client)
+        return RuleBasedExtractor()
 
     @property
     def db_path(self) -> Path:

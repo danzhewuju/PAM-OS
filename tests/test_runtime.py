@@ -4,7 +4,8 @@ import json
 
 from pam_os.api import create_app
 from pam_os.cli import main
-from pam_os.config import AppConfig, ConsolidationConfig, load_config
+from pam_os.config import AppConfig, ConsolidationConfig, ExtractionConfig, LlmProviderConfig, ProvidersConfig, load_config
+from pam_os.llm_extractor import LlmMemoryExtractor
 from pam_os.models import ConsolidationResult, MemoryUseDecision, SearchResult
 from pam_os.runtime import PersonalMemoryRuntime
 from pam_os.version import __version__
@@ -56,6 +57,19 @@ class EmptyConsolidator:
     def consolidate(self, *, recent=100):
         self.calls += 1
         return ConsolidationResult(memories_scanned=recent, behavior_events_scanned=0)
+
+
+class FakeLlmExtractionClient:
+    def __init__(self, payload=None, error=None):
+        self.payload = payload
+        self.error = error
+        self.calls = []
+
+    def extract_memories(self, content, metadata):
+        self.calls.append((content, metadata))
+        if self.error is not None:
+            raise self.error
+        return self.payload
 
 
 def test_memory_roundtrip(tmp_path):
@@ -472,6 +486,131 @@ def test_policy_provider_can_skip_capture(tmp_path):
 
     assert captured.should_capture is False
     assert captured.reason == "fake no capture policy"
+
+
+def test_runtime_uses_rule_extractor_by_default(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
+
+    assert type(runtime.extractor).__name__ == "RuleBasedExtractor"
+    assert captured.memories
+    assert captured.memories[0].type == "preference"
+
+
+def test_runtime_can_use_configured_llm_extractor_with_fake_client(tmp_path):
+    client = FakeLlmExtractionClient(
+        {
+            "memories": [
+                {
+                    "type": "preference",
+                    "content": "用户偏好本地优先的工具。",
+                    "importance": 0.91,
+                    "confidence": 0.82,
+                    "tags": ["preference", "local-first"],
+                    "fact_key": "preference.technical.local_first",
+                    "evidence": "我偏好本地优先的工具",
+                }
+            ]
+        }
+    )
+    config = AppConfig(
+        extraction=ExtractionConfig(provider="llm"),
+        providers=ProvidersConfig(llm=LlmProviderConfig(enabled=True)),
+    )
+    runtime = PersonalMemoryRuntime(
+        db_path=tmp_path / "memory.sqlite3",
+        config=config,
+        llm_extraction_client=client,
+    )
+
+    captured = runtime.capture_memory("我偏好本地优先的工具。", force=True)
+
+    assert isinstance(runtime.extractor, LlmMemoryExtractor)
+    assert client.calls[0][0] == "我偏好本地优先的工具。"
+    assert "capture_signals" in client.calls[0][1]
+    assert [memory.content for memory in captured.memories] == ["用户偏好本地优先的工具。"]
+    assert captured.memories[0].type == "preference"
+    assert "fact:preference.technical.local_first" in captured.memories[0].tags
+
+
+def test_llm_extractor_invalid_json_falls_back_to_rules(tmp_path):
+    runtime = PersonalMemoryRuntime(
+        db_path=tmp_path / "memory.sqlite3",
+        extractor=LlmMemoryExtractor(FakeLlmExtractionClient("not json")),
+    )
+
+    captured = runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
+
+    assert captured.memories
+    assert captured.memories[0].type == "preference"
+    assert "self-host" in captured.memories[0].content
+
+
+def test_llm_extractor_client_error_falls_back_to_rules(tmp_path):
+    runtime = PersonalMemoryRuntime(
+        db_path=tmp_path / "memory.sqlite3",
+        extractor=LlmMemoryExtractor(FakeLlmExtractionClient(error=RuntimeError("timeout"))),
+    )
+
+    captured = runtime.capture_memory("我计划继续优化 PAM-OS。", force=True)
+
+    assert captured.memories
+    assert captured.memories[0].type == "goal"
+
+
+def test_llm_extractor_rejects_missing_evidence_and_falls_back(tmp_path):
+    client = FakeLlmExtractionClient(
+        {
+            "memories": [
+                {
+                    "type": "preference",
+                    "content": "用户偏好云端优先。",
+                    "evidence": "我偏好云端优先",
+                }
+            ]
+        }
+    )
+    runtime = PersonalMemoryRuntime(
+        db_path=tmp_path / "memory.sqlite3",
+        extractor=LlmMemoryExtractor(client),
+    )
+
+    captured = runtime.capture_memory("我偏好本地优先的工具。", force=True)
+
+    assert captured.memories
+    assert "本地优先" in captured.memories[0].content
+    assert "云端优先" not in captured.memories[0].content
+
+
+def test_llm_extractor_normalizes_type_scores_and_tags(tmp_path):
+    runtime = PersonalMemoryRuntime(
+        db_path=tmp_path / "memory.sqlite3",
+        extractor=LlmMemoryExtractor(
+            FakeLlmExtractionClient(
+                {
+                    "memories": [
+                        {
+                            "type": "unknown",
+                            "content": "用户偏好可控系统。",
+                            "importance": 2,
+                            "confidence": "bad",
+                            "tags": ["preference", "", 123],
+                            "fact_key": "general.preference",
+                        }
+                    ]
+                }
+            )
+        ),
+    )
+
+    captured = runtime.capture_memory("我偏好可控系统。", force=True)
+
+    memory = captured.memories[0]
+    assert memory.type == "semantic"
+    assert memory.importance == 1.0
+    assert memory.confidence == 0.5
+    assert memory.tags == ["123", "fact:general.preference", "preference"]
 
 
 def test_adaptive_policy_learns_read_signal(tmp_path):
@@ -891,6 +1030,15 @@ profile_limit = 1
 [consolidation]
 recent_limit = 5
 
+[extraction]
+provider = "llm"
+
+[providers.llm]
+enabled = true
+model = "fake-model"
+api_key_env = "FAKE_API_KEY"
+timeout_seconds = 3
+
 [profile]
 default_limit = 1
 """,
@@ -900,6 +1048,11 @@ default_limit = 1
     config = load_config(config_path)
     runtime = PersonalMemoryRuntime(config=config)
     assert runtime.db_path == db_path
+    assert config.extraction.provider == "llm"
+    assert config.providers.llm.enabled is True
+    assert config.providers.llm.model == "fake-model"
+    assert config.providers.llm.api_key_env == "FAKE_API_KEY"
+    assert config.providers.llm.timeout_seconds == 3
 
     runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
     runtime.record_behavior_choice(
