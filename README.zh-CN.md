@@ -84,6 +84,12 @@ curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master
 scripts/install-plugin-local.sh
 ```
 
+Windows PowerShell 下可以使用：
+
+```powershell
+.\scripts\install-plugin-local.ps1
+```
+
 ### 仅安装 Skill
 
 适用于客户端支持 Skills 或项目指令，但不需要插件发现或 MCP 工具注册的场景。安装器会下载并安装 `pam-os-memory` skill，然后默认配置为通过 CLI 调用本地 PAM-OS 运行时。

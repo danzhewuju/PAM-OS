@@ -85,6 +85,12 @@ GitHub first:
 scripts/install-plugin-local.sh
 ```
 
+On Windows PowerShell:
+
+```powershell
+.\scripts\install-plugin-local.ps1
+```
+
 ### Skill-only
 
 Use this when your client supports Skills or project instructions, but does not need plugin discovery or MCP tool registration. The installer downloads and installs the `pam-os-memory` skill, then configures it to call the local PAM-OS runtime through CLI by default.

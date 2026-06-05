@@ -218,6 +218,17 @@ function Enable-Target {
     }
 }
 
+function Get-OptionValue {
+    param(
+        [string]$Option,
+        [int]$Index
+    )
+    if ($Index -ge $CliArgs.Count -or [string]::IsNullOrWhiteSpace($CliArgs[$Index]) -or $CliArgs[$Index].StartsWith("-")) {
+        Stop-Install "$Option requires a value"
+    }
+    return $CliArgs[$Index]
+}
+
 function Get-Timestamp {
     return (Get-Date).ToString("yyyyMMdd-HHmmss")
 }
@@ -979,7 +990,8 @@ try {
         switch ($arg) {
             "--target" {
                 $i++
-                Enable-Target (if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" })
+                $target = Get-OptionValue $arg $i
+                Enable-Target $target
             }
             "--codex" { $script:InstallCodex = $true }
             "--claude" { $script:InstallClaude = $true }
@@ -988,66 +1000,66 @@ try {
             "--all" { Enable-Target "all" }
             "--plugin-dir" {
                 $i++
-                $script:PluginDir = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:PluginDir = Get-OptionValue $arg $i
             }
             "--marketplace" {
                 $i++
-                $script:MarketplacePath = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:MarketplacePath = Get-OptionValue $arg $i
             }
             "--codex-config" {
                 $i++
-                $script:CodexConfig = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:CodexConfig = Get-OptionValue $arg $i
             }
             "--codex-skill-dir" {
                 $i++
-                $script:CodexSkillDir = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:CodexSkillDir = Get-OptionValue $arg $i
             }
             "--claude-skill-dir" {
                 $i++
-                $script:ClaudeSkillDir = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:ClaudeSkillDir = Get-OptionValue $arg $i
             }
             "--opencode-agents" {
                 $i++
-                $script:OpenCodeAgentsFile = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:OpenCodeAgentsFile = Get-OptionValue $arg $i
             }
             "--hermes-config" {
                 $i++
-                $script:HermesConfig = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:HermesConfig = Get-OptionValue $arg $i
             }
             "--hermes-agents" {
                 $i++
-                $script:HermesAgentsFile = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:HermesAgentsFile = Get-OptionValue $arg $i
             }
             "--repo-dir" {
                 $i++
-                $script:RepoDir = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:RepoDir = Get-OptionValue $arg $i
                 $script:RepoDirExplicit = $true
                 $script:RefreshRepo = $false
             }
             "--repo-url" {
                 $i++
-                $script:RepoUrl = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:RepoUrl = Get-OptionValue $arg $i
             }
             "--ref" {
                 $i++
-                $script:RepoRef = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:RepoRef = Get-OptionValue $arg $i
             }
             "--no-refresh" { $script:RefreshRepo = $false }
             "--db" {
                 $i++
-                $script:DbPath = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:DbPath = Get-OptionValue $arg $i
             }
             "--python" {
                 $i++
-                $script:PythonVersion = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:PythonVersion = Get-OptionValue $arg $i
             }
             "--uv-bin" {
                 $i++
-                $script:UvBin = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:UvBin = Get-OptionValue $arg $i
             }
             "--source" {
                 $i++
-                $script:SourceDir = if ($i -lt $CliArgs.Count) { $CliArgs[$i] } else { "" }
+                $script:SourceDir = Get-OptionValue $arg $i
             }
             "--skip-marketplace" { $script:WriteMarketplace = $false }
             "--skip-mcp-config" { $script:WriteMcpConfig = $false }
