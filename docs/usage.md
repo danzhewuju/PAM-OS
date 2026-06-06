@@ -296,7 +296,7 @@ uv run --python 3.12 memory add "我偏好 self-host 和本地可控系统。"
 uv run --python 3.12 memory capture "我决定 PAM-OS v0.1 先用 SQLite FTS5。" --force
 
 # 搜索
-uv run --python 3.12 memory search "self-host" --limit 5 --type preference
+uv run --python 3.12 memory search "self-host" --limit 5 --type preference --min-confidence 0.5
 ```
 
 ### 7.3 准备上下文
@@ -315,6 +315,7 @@ uv run --python 3.12 memory behavior-choice \
   --rejected "Qdrant" \
   --reason "MVP 阶段先保持本地、轻量、可控"
 
+uv run --python 3.12 memory observe-turn "我偏好本地优先、轻量、可控的技术方案。" --assistant-message "收到。"
 uv run --python 3.12 memory consolidate --recent 100
 uv run --python 3.12 memory profile
 uv run --python 3.12 memory profile --query "技术路线"
@@ -326,6 +327,7 @@ uv run --python 3.12 memory profile --query "技术路线"
 uv run --python 3.12 memory stats                    # 存储概览
 uv run --python 3.12 memory inspect                  # 各表记忆明细
 uv run --python 3.12 memory inspect --table memories --limit 10
+uv run --python 3.12 memory compile "继续做 PAM-OS" --limit 8 --min-confidence 0.5
 uv run --python 3.12 memory reflect --recent 50      # 反思上下文
 uv run --python 3.12 memory clear --confirm          # 清空所有数据（不可逆）
 ```
@@ -359,10 +361,12 @@ uv run --python 3.12 --extra api memory serve --host 127.0.0.1 --port 8765
 | --- | --- | --- |
 | `GET` | `/health` | 健康检查、数据库路径、FTS 状态。 |
 | `POST` | `/events` | 低层写入事件并抽取记忆。 |
-| `GET` | `/memories/search?q=...` | 搜索记忆。 |
+| `GET` | `/memories/search?q=...&limit=10&type=preference&min_confidence=0.5` | 搜索记忆，支持按类型和分数过滤。 |
+| `GET` | `/memory/should-use?task=...` | 判断当前任务是否应读取记忆。 |
 | `POST` | `/context/prepare` | 推荐的回答前上下文准备。 |
 | `POST` | `/memory/capture` | 推荐的回答后记忆捕获。 |
 | `POST` | `/behavior/choice` | 记录用户行为选择。 |
+| `POST` | `/turns/observe` | 观察一轮对话并执行自动记忆/策略学习。 |
 | `POST` | `/memory/consolidate` | 巩固画像。 |
 | `GET` | `/profile` | 查看画像。 |
 | `GET` | `/memory/inspect?table=all&limit=20&q=...` | 查看各表记忆明细。 |

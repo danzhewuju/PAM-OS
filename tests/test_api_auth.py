@@ -105,3 +105,32 @@ def test_inspect_memory_rest_api_rejects_unknown_table(tmp_path):
         inspect_route.endpoint(table="secrets", limit=20, q=None)
 
     assert "400" in str(exc.value)
+
+
+def test_search_memory_rest_api_supports_type_and_score_filters(tmp_path):
+    app = create_app(db_path=tmp_path / "memory.sqlite3")
+    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/capture")
+    search_route = next(route for route in app.routes if getattr(route, "path", None) == "/memories/search")
+    capture_request = type(
+        "CaptureRequest",
+        (),
+        {
+            "content": "我是 Alex，我喜欢 digital products。",
+            "source": "conversation",
+            "source_ref": None,
+            "metadata": {},
+            "force": True,
+        },
+    )()
+
+    capture_route.endpoint(capture_request)
+    payload = search_route.endpoint(
+        q="Alex",
+        limit=10,
+        memory_types=["identity"],
+        min_importance=0.0,
+        min_confidence=0.0,
+    )
+
+    assert payload
+    assert {item["memory"]["type"] for item in payload} == {"identity"}

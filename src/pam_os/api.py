@@ -12,7 +12,7 @@ from pam_os.version import __version__
 
 def create_app(db_path: Path | str | None = None, config=None):
     try:
-        from fastapi import Depends, FastAPI, HTTPException, status
+        from fastapi import Depends, FastAPI, HTTPException, Query, status
         from fastapi.security import HTTPBasic, HTTPBasicCredentials
         from pydantic import BaseModel, Field
     except ImportError as exc:
@@ -116,8 +116,22 @@ def create_app(db_path: Path | str | None = None, config=None):
         )
 
     @app.get("/memories/search")
-    def search_memory(q: str, limit: int = 10) -> list[dict[str, Any]]:
-        return to_plain(runtime.search_memory(q, limit=limit))
+    def search_memory(
+        q: str,
+        limit: int = 10,
+        memory_types: list[str] | None = Query(default=None, alias="type"),
+        min_importance: float = 0.0,
+        min_confidence: float = 0.0,
+    ) -> list[dict[str, Any]]:
+        return to_plain(
+            runtime.search_memory(
+                q,
+                limit=limit,
+                types=memory_types,
+                min_importance=min_importance,
+                min_confidence=min_confidence,
+            )
+        )
 
     @app.get("/memory/should-use")
     def should_use_memory(task: str, conversation_summary: str | None = None) -> dict[str, Any]:

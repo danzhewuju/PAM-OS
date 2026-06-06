@@ -78,7 +78,13 @@ def main(argv: list[str] | None = None) -> int:
             print_json(to_plain(result))
             return 0
         if args.command == "search":
-            results = runtime.search_memory(args.query, limit=args.limit, types=args.type)
+            results = runtime.search_memory(
+                args.query,
+                limit=args.limit,
+                types=args.type,
+                min_importance=args.min_importance,
+                min_confidence=args.min_confidence,
+            )
             print_json(to_plain(results))
             return 0
         if args.command == "should-use":
@@ -126,6 +132,17 @@ def main(argv: list[str] | None = None) -> int:
             result = runtime.consolidate_memory(recent=args.recent)
             print_json(to_plain(result))
             return 0
+        if args.command == "observe-turn":
+            result = runtime.observe_turn(
+                user_message=args.user_message,
+                assistant_message=args.assistant_message or "",
+                conversation_summary=args.conversation_summary,
+                source_ref=args.source_ref,
+                auto_capture=not args.no_auto_capture,
+                auto_learn_policy=not args.no_auto_learn_policy,
+            )
+            print_json(to_plain(result))
+            return 0
         if args.command == "profile":
             traits = runtime.get_user_profile(limit=args.limit, query=args.query)
             print_json(to_plain(traits))
@@ -148,7 +165,12 @@ def main(argv: list[str] | None = None) -> int:
             print_json(to_plain(result))
             return 0
         if args.command == "compile":
-            package = runtime.compile_context(args.task, limit=args.limit)
+            package = runtime.compile_context(
+                args.task,
+                limit=args.limit,
+                min_importance=args.min_importance,
+                min_confidence=args.min_confidence,
+            )
             print(package.content)
             return 0
         if args.command == "reflect":
@@ -201,6 +223,8 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=10)
     search.add_argument("--type", action="append", choices=["semantic", "episodic", "identity", "preference", "goal", "project", "style"])
+    search.add_argument("--min-importance", type=float, default=0.0)
+    search.add_argument("--min-confidence", type=float, default=0.0)
 
     should_use = subparsers.add_parser("should-use", help="Decide whether a task should use memory")
     should_use.add_argument("task")
@@ -232,6 +256,14 @@ def build_parser() -> argparse.ArgumentParser:
     consolidate = subparsers.add_parser("consolidate", help="Promote memories and behavior evidence into profile traits")
     consolidate.add_argument("--recent", type=int)
 
+    observe_turn = subparsers.add_parser("observe-turn", help="Observe a completed chat turn for memory and policy learning")
+    observe_turn.add_argument("user_message")
+    observe_turn.add_argument("--assistant-message")
+    observe_turn.add_argument("--conversation-summary")
+    observe_turn.add_argument("--source-ref")
+    observe_turn.add_argument("--no-auto-capture", action="store_true")
+    observe_turn.add_argument("--no-auto-learn-policy", action="store_true")
+
     profile = subparsers.add_parser("profile", help="List ultra-long-term profile traits")
     profile.add_argument("--limit", type=int)
     profile.add_argument("--query")
@@ -254,6 +286,8 @@ def build_parser() -> argparse.ArgumentParser:
     compile_cmd = subparsers.add_parser("compile", help="Compile a prompt-ready context package")
     compile_cmd.add_argument("task")
     compile_cmd.add_argument("--limit", type=int)
+    compile_cmd.add_argument("--min-importance", type=float, default=0.0)
+    compile_cmd.add_argument("--min-confidence", type=float, default=0.0)
 
     reflect = subparsers.add_parser("reflect", help="Compile context from recent memories")
     reflect.add_argument("--recent", type=int, default=50)

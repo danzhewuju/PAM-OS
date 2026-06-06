@@ -45,10 +45,12 @@ Prefer these MCP tools when available:
 - `prepare_context`: read memory before answering history-, preference-, or project-dependent tasks.
 - `capture_memory`: store stable user preferences, goals, project decisions, style guidance, or corrections.
 - `record_behavior_choice`: record choices when the user chooses, rejects, or defers options.
+- `observe_turn`: observe a completed chat turn for conservative automatic memory and policy learning.
 - `consolidate_memory`: promote recent evidence into profile traits after meaningful batches.
 - `get_profile`: read stable user profile traits when profile context is needed.
 - `search_memory`: search stored memories for explicit memory lookup requests.
 - `inspect_memory` and `get_storage_stats`: diagnostics only.
+- `clear_memory`: destructive maintenance only, and only when the user explicitly asks to clear memory.
 
 When a context package is returned, use `package.content` as private working context. Do not paste the whole package to the user unless asked.
 
@@ -56,11 +58,20 @@ When a context package is returned, use `package.content` as private working con
 
 REST endpoint equivalents:
 
+- add raw event: `POST /events`
+- search: `GET /memories/search?q=...&limit=10&type=preference`
+- should use memory: `GET /memory/should-use?task=...`
 - prepare: `POST /context/prepare`
 - capture: `POST /memory/capture`
 - behavior choice: `POST /behavior/choice`
+- observe turn: `POST /turns/observe`
 - consolidate: `POST /memory/consolidate`
-- profile: `GET /profile`
+- profile: `GET /profile?limit=20&q=...`
+- inspect: `GET /memory/inspect?table=all&limit=20&q=...`
+- stats: `GET /storage/stats`
+- compile: `POST /context/compile`
+- reflect: `POST /reflect`
+- clear memory: `POST /memory/clear` with `confirm=true`; destructive, user-requested maintenance only.
 
 If REST `username` and `password` are non-empty, send HTTP Basic Auth on every REST request. If either value is empty, do not send an Authorization header.
 
@@ -71,10 +82,16 @@ CLI fallback is available but may require shell execution approval. In CLI mode,
 If `[cli].repo_dir` is empty, first locate the PAM-OS repository that contains `pyproject.toml` and `src/pam_os`, then use that absolute path.
 
 ```bash
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" search "<query>" --limit 10 --type preference
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" should-use "<current task>"
 uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" prepare "<current task>" --json
 uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" capture "<stable information>"
 uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" behavior-choice --context "<decision context>" --chosen "<chosen option>"
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" observe-turn "<user message>" --assistant-message "<assistant response>"
 uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" consolidate --recent 100
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" profile --limit 20
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" inspect --table memories --limit 20 --json
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" stats
 ```
 
 ## Before Answering

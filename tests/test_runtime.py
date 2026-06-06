@@ -1227,6 +1227,28 @@ def test_clear_cli_clears_storage(tmp_path, capsys):
     assert stats.tables["memories"]["count"] == 0
 
 
+def test_observe_turn_cli_outputs_json(tmp_path, capsys):
+    db_path = tmp_path / "memory.sqlite3"
+
+    exit_code = main(
+        [
+            "--db",
+            str(db_path),
+            "observe-turn",
+            "我偏好 PAM-OS 自动写入稳定偏好。",
+            "--assistant-message",
+            "已记录。",
+            "--no-auto-learn-policy",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["memory_captures"]
+    assert payload["memory_captures"][0]["should_capture"] is True
+    assert payload["policy_outcomes"] == []
+
 
 def test_version_cli_outputs_current_version(capsys):
     exit_code = main(["version"])
