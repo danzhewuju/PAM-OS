@@ -74,6 +74,7 @@ Options:
   --rest-url URL        PAM-OS REST server URL. Default: http://127.0.0.1:8765.
   --rest-username USER  REST Basic Auth username. Default: empty.
   --rest-password PASS  REST Basic Auth password. Default: empty.
+                        In interactive REST mode, existing installed skill REST settings are offered for reuse.
   --no-refresh          Do not fetch or clone the managed repo before installing.
   --db PATH             PAM-OS SQLite database path. Default: ~/.pam-os/memory.sqlite3.
   --python VERSION      Python version for uv run --python. Default: 3.12.
@@ -242,6 +243,125 @@ prompt_secret() {
     die "Interactive prompt requires a TTY. Pass explicit REST options or use --yes."
   fi
   printf '%s' "${reply:-$default}"
+}
+
+
+load_existing_rest_config() {
+  local paths=()
+  local output=()
+
+  if [[ "$INSTALL_CODEX" == "1" ]]; then
+    paths+=("$CODEX_SKILL_DIR/config.toml")
+  fi
+  if [[ "$INSTALL_CLAUDE" == "1" || "$INSTALL_OPENCODE" == "1" || "$INSTALL_HERMES" == "1" ]]; then
+    paths+=("$CLAUDE_SKILL_DIR/config.toml")
+  fi
+  paths+=("$CODEX_SKILL_DIR/config.toml" "$CLAUDE_SKILL_DIR/config.toml")
+
+  mapfile -t output < <("$PYTHON_BIN" - "${paths[@]}" <<'PY'
+import sys
+from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    raise SystemExit(0)
+
+seen = set()
+for raw_path in sys.argv[1:]:
+    if not raw_path or raw_path in seen:
+        continue
+    seen.add(raw_path)
+    path = Path(raw_path).expanduser()
+    if not path.exists():
+        continue
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    if not isinstance(data, dict):
+        continue
+    rest = data.get("rest", {})
+    if not isinstance(rest, dict):
+        continue
+    url = rest.get("url", "")
+    if not isinstance(url, str) or not url.strip():
+        continue
+    mode = data.get("mode", "")
+    username = rest.get("username", "")
+    password = rest.get("password", "")
+    print(str(path))
+    print(mode if isinstance(mode, str) else "")
+    print(url)
+    print(username if isinstance(username, str) else "")
+    print(password if isinstance(password, str) else "")
+    raise SystemExit(0)
+PY
+)
+
+  [[ "${#output[@]}" -ge 5 ]] || return 1
+  EXISTING_REST_CONFIG_PATH="${output[0]}"
+  EXISTING_REST_MODE="${output[1]}"
+  EXISTING_REST_URL="${output[2]}"
+  EXISTING_REST_USERNAME="${output[3]}"
+  EXISTING_REST_PASSWORD="${output[4]}"
+}
+
+print_rest_config_summary() {
+  local path="$1"
+  local mode="$2"
+  local url="$3"
+  local username="$4"
+  local password="$5"
+  local password_label="empty"
+
+  if [[ -n "$password" ]]; then
+    password_label="set"
+  fi
+
+  printf '\nREST configuration found:\n'
+  printf '  path: %s\n' "$path"
+  if [[ -n "$mode" ]]; then
+    printf '  mode: %s\n' "$mode"
+  fi
+  printf '  url: %s\n' "$url"
+  printf '  username: %s\n' "${username:-<empty>}"
+  printf '  password: %s\n' "$password_label"
+}
+
+configure_rest_runtime() {
+  local explicit_count=0
+
+  if [[ "$REST_URL_EXPLICIT" == "1" ]]; then
+    explicit_count=$((explicit_count + 1))
+  fi
+  if [[ "$REST_USERNAME_EXPLICIT" == "1" ]]; then
+    explicit_count=$((explicit_count + 1))
+  fi
+  if [[ "$REST_PASSWORD_EXPLICIT" == "1" ]]; then
+    explicit_count=$((explicit_count + 1))
+  fi
+
+  if [[ "$explicit_count" -eq 0 ]] && load_existing_rest_config; then
+    print_rest_config_summary "$EXISTING_REST_CONFIG_PATH" "$EXISTING_REST_MODE" "$EXISTING_REST_URL" "$EXISTING_REST_USERNAME" "$EXISTING_REST_PASSWORD"
+    if confirm "Use this existing REST configuration?" "y"; then
+      REST_URL="$EXISTING_REST_URL"
+      REST_USERNAME="$EXISTING_REST_USERNAME"
+      REST_PASSWORD="$EXISTING_REST_PASSWORD"
+      return 0
+    fi
+  fi
+
+  if [[ "$explicit_count" -gt 0 ]]; then
+    print_rest_config_summary "options/environment" "" "$REST_URL" "$REST_USERNAME" "$REST_PASSWORD"
+    if confirm "Use this REST configuration?" "y"; then
+      return 0
+    fi
+  fi
+
+  REST_URL="$(prompt_value "PAM-OS REST URL" "$REST_URL")"
+  REST_USERNAME="$(prompt_value "REST username" "$REST_USERNAME")"
+  REST_PASSWORD="$(prompt_secret "REST password" "$REST_PASSWORD")"
 }
 
 select_install_targets() {
@@ -1192,6 +1312,17 @@ INSTALL_MODE=""
 REST_URL="${PAM_OS_REST_URL:-http://127.0.0.1:8765}"
 REST_USERNAME="${PAM_OS_REST_USERNAME:-}"
 REST_PASSWORD="${PAM_OS_REST_PASSWORD:-}"
+REST_URL_EXPLICIT=0
+REST_USERNAME_EXPLICIT=0
+REST_PASSWORD_EXPLICIT=0
+[[ -n "${PAM_OS_REST_URL:-}" ]] && REST_URL_EXPLICIT=1
+[[ -v PAM_OS_REST_USERNAME ]] && REST_USERNAME_EXPLICIT=1
+[[ -v PAM_OS_REST_PASSWORD ]] && REST_PASSWORD_EXPLICIT=1
+EXISTING_REST_CONFIG_PATH=""
+EXISTING_REST_MODE=""
+EXISTING_REST_URL=""
+EXISTING_REST_USERNAME=""
+EXISTING_REST_PASSWORD=""
 DB_PATH="$DEFAULT_DB_PATH"
 PYTHON_VERSION="${PAM_OS_CLI_PYTHON:-3.12}"
 UV_BIN="${PAM_OS_UV_BIN:-}"
@@ -1288,14 +1419,17 @@ while [[ $# -gt 0 ]]; do
       ;;
     --rest-url)
       REST_URL="${2:-}"
+      REST_URL_EXPLICIT=1
       shift 2
       ;;
     --rest-username|--rest-user)
       REST_USERNAME="${2:-}"
+      REST_USERNAME_EXPLICIT=1
       shift 2
       ;;
     --rest-password)
       REST_PASSWORD="${2:-}"
+      REST_PASSWORD_EXPLICIT=1
       shift 2
       ;;
     --no-refresh)
@@ -1410,14 +1544,6 @@ else
   INSTALL_MODE="$MODE_ARG"
 fi
 
-if [[ "$INSTALL_MODE" == "rest" ]]; then
-  REST_URL="$(prompt_value "PAM-OS REST URL" "$REST_URL")"
-  REST_USERNAME="$(prompt_value "REST username" "$REST_USERNAME")"
-  REST_PASSWORD="$(prompt_secret "REST password" "$REST_PASSWORD")"
-fi
-
-[[ -n "$REST_URL" ]] || die "--rest-url must not be empty when --mode rest is selected."
-
 if [[ -n "$UV_BIN" ]]; then
   [[ -x "$UV_BIN" ]] || die "--uv-bin must point to an executable uv binary: $UV_BIN"
   UV_BIN="$(abs_path "$UV_BIN")"
@@ -1427,6 +1553,12 @@ fi
 
 PYTHON_BIN="$(find_python_bin || true)"
 [[ -n "$PYTHON_BIN" ]] || die "Could not find a working Python executable for installer config writes."
+
+if [[ "$INSTALL_MODE" == "rest" ]]; then
+  configure_rest_runtime
+fi
+
+[[ -n "$REST_URL" ]] || die "--rest-url must not be empty when --mode rest is selected."
 
 resolve_repo_dir
 if [[ "$INSTALL_CODEX" == "1" ]]; then

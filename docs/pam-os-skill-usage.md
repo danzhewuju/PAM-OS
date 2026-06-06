@@ -278,7 +278,7 @@ Codex 的 skill 路径：
 ./scripts/install-plugin.sh --codex --mode rest --rest-url http://127.0.0.1:8765
 ```
 
-重启 Codex 后，REST 模式会通过 skill 读取 `~/.codex/skills/pam-os-memory/config.toml` 并调用 `[rest].url`。CLI 模式才会优先使用 `pam_os_memory` MCP server。
+重启 Codex 后，REST 模式会通过 skill 读取 `~/.codex/skills/pam-os-memory/config.toml` 并调用 `[rest].url`。CLI 模式才会优先使用 `pam_os_memory` MCP server。交互式 REST 安装会优先检测已安装 skill 的 REST 配置；确认复用后不会再逐项询问 URL、用户名和密码。
 
 显式触发 skill：
 

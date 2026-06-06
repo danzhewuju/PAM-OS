@@ -142,7 +142,7 @@ Claude:     ~/.claude/skills/pam-os-memory/config.toml
 CC Switch:  ~/.config/cc-switch/skills/pam-os-memory/config.toml
 ```
 
-默认是 `mode = "cli"`。如果要后续都走 REST，推荐重新运行安装器并选择 `--mode rest`；它会写入 `mode = "rest"`，并移除安装器管理的本地 MCP 注册。
+默认是 `mode = "cli"`。如果要后续都走 REST，推荐重新运行安装器并选择 `--mode rest`；它会写入 `mode = "rest"`，并移除安装器管理的本地 MCP 注册。交互式 REST 安装会先读取已安装 skill 的 REST 配置；如果存在，会让你确认复用，不需要重新输入 URL、用户名和密码。
 
 ### 3.4 建议给模型的系统提示片段
 

@@ -7,6 +7,8 @@ REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 INSTALLER="$REPO_ROOT/scripts/install-plugin.sh"
 PLUGIN_NAME="${PAM_OS_PLUGIN_NAME:-pam-os-memory}"
 SOURCE_DIR="$REPO_ROOT/plugins/$PLUGIN_NAME"
+CODEX_SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/$PLUGIN_NAME"
+CLAUDE_SKILL_DIR="$HOME/.claude/skills/$PLUGIN_NAME"
 
 ASSUME_YES=1
 HAS_TARGET=0
@@ -19,6 +21,17 @@ SELECTED_MODE=""
 REST_URL="${PAM_OS_REST_URL:-http://127.0.0.1:8765}"
 REST_USERNAME="${PAM_OS_REST_USERNAME:-}"
 REST_PASSWORD="${PAM_OS_REST_PASSWORD:-}"
+REST_URL_EXPLICIT=0
+REST_USERNAME_EXPLICIT=0
+REST_PASSWORD_EXPLICIT=0
+[[ -n "${PAM_OS_REST_URL:-}" ]] && REST_URL_EXPLICIT=1
+[[ -v PAM_OS_REST_USERNAME ]] && REST_USERNAME_EXPLICIT=1
+[[ -v PAM_OS_REST_PASSWORD ]] && REST_PASSWORD_EXPLICIT=1
+EXISTING_REST_CONFIG_PATH=""
+EXISTING_REST_MODE=""
+EXISTING_REST_URL=""
+EXISTING_REST_USERNAME=""
+EXISTING_REST_PASSWORD=""
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -109,6 +122,160 @@ prompt_secret() {
   printf -v "$__result_var" '%s' "${reply:-$default}"
 }
 
+
+confirm_user() {
+  local prompt="$1"
+  local default="${2:-y}"
+  local reply suffix
+
+  if [[ "$default" == "y" ]]; then
+    suffix="[Y/n]"
+  else
+    suffix="[y/N]"
+  fi
+
+  while true; do
+    if ! read_user reply "$prompt $suffix "; then
+      [[ "$default" == "y" ]]
+      return
+    fi
+    reply="${reply:-$default}"
+    case "$reply" in
+      y|Y|yes|YES) return 0 ;;
+      n|N|no|NO) return 1 ;;
+      *) ui_printf 'Please answer y or n.\n' ;;
+    esac
+  done
+}
+
+load_existing_rest_config() {
+  local paths=()
+  local output=()
+  local target
+
+  if [[ "${#SELECTED_TARGETS[@]}" -gt 0 ]]; then
+    for target in "${SELECTED_TARGETS[@]}"; do
+      case "$target" in
+        codex)
+          paths+=("$CODEX_SKILL_DIR/config.toml")
+          ;;
+        claude|opencode|hermes)
+          paths+=("$CLAUDE_SKILL_DIR/config.toml")
+          ;;
+        all)
+          paths+=("$CODEX_SKILL_DIR/config.toml" "$CLAUDE_SKILL_DIR/config.toml")
+          ;;
+      esac
+    done
+  fi
+  paths+=("$CODEX_SKILL_DIR/config.toml" "$CLAUDE_SKILL_DIR/config.toml")
+
+  mapfile -t output < <(python3 - "${paths[@]}" <<'PY'
+import sys
+from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    raise SystemExit(0)
+
+seen = set()
+for raw_path in sys.argv[1:]:
+    if not raw_path or raw_path in seen:
+        continue
+    seen.add(raw_path)
+    path = Path(raw_path).expanduser()
+    if not path.exists():
+        continue
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        continue
+    if not isinstance(data, dict):
+        continue
+    rest = data.get("rest", {})
+    if not isinstance(rest, dict):
+        continue
+    url = rest.get("url", "")
+    if not isinstance(url, str) or not url.strip():
+        continue
+    mode = data.get("mode", "")
+    username = rest.get("username", "")
+    password = rest.get("password", "")
+    print(str(path))
+    print(mode if isinstance(mode, str) else "")
+    print(url)
+    print(username if isinstance(username, str) else "")
+    print(password if isinstance(password, str) else "")
+    raise SystemExit(0)
+PY
+)
+
+  [[ "${#output[@]}" -ge 5 ]] || return 1
+  EXISTING_REST_CONFIG_PATH="${output[0]}"
+  EXISTING_REST_MODE="${output[1]}"
+  EXISTING_REST_URL="${output[2]}"
+  EXISTING_REST_USERNAME="${output[3]}"
+  EXISTING_REST_PASSWORD="${output[4]}"
+}
+
+print_rest_config_summary() {
+  local path="$1"
+  local mode="$2"
+  local url="$3"
+  local username="$4"
+  local password="$5"
+  local password_label="empty"
+
+  if [[ -n "$password" ]]; then
+    password_label="set"
+  fi
+
+  ui_printf '\nREST configuration found:\n'
+  ui_printf '  path: %s\n' "$path"
+  if [[ -n "$mode" ]]; then
+    ui_printf '  mode: %s\n' "$mode"
+  fi
+  ui_printf '  url: %s\n' "$url"
+  ui_printf '  username: %s\n' "${username:-<empty>}"
+  ui_printf '  password: %s\n' "$password_label"
+}
+
+configure_rest_runtime() {
+  local explicit_count=0
+
+  if [[ "$REST_URL_EXPLICIT" == "1" ]]; then
+    explicit_count=$((explicit_count + 1))
+  fi
+  if [[ "$REST_USERNAME_EXPLICIT" == "1" ]]; then
+    explicit_count=$((explicit_count + 1))
+  fi
+  if [[ "$REST_PASSWORD_EXPLICIT" == "1" ]]; then
+    explicit_count=$((explicit_count + 1))
+  fi
+
+  if [[ "$explicit_count" -eq 0 ]] && command -v python3 >/dev/null 2>&1 && load_existing_rest_config; then
+    print_rest_config_summary "$EXISTING_REST_CONFIG_PATH" "$EXISTING_REST_MODE" "$EXISTING_REST_URL" "$EXISTING_REST_USERNAME" "$EXISTING_REST_PASSWORD"
+    if confirm_user "Use this existing REST configuration?" "y"; then
+      REST_URL="$EXISTING_REST_URL"
+      REST_USERNAME="$EXISTING_REST_USERNAME"
+      REST_PASSWORD="$EXISTING_REST_PASSWORD"
+      return 0
+    fi
+  fi
+
+  if [[ "$explicit_count" -gt 0 ]]; then
+    print_rest_config_summary "options/environment" "" "$REST_URL" "$REST_USERNAME" "$REST_PASSWORD"
+    if confirm_user "Use this REST configuration?" "y"; then
+      return 0
+    fi
+  fi
+
+  prompt_value REST_URL "PAM-OS REST URL" "$REST_URL"
+  prompt_value REST_USERNAME "REST username" "$REST_USERNAME"
+  prompt_secret REST_PASSWORD "REST password" "$REST_PASSWORD"
+}
+
 select_install_targets() {
   local selection item valid
 
@@ -183,9 +350,7 @@ select_runtime_mode() {
         ;;
       2|rest|REST)
         SELECTED_MODE="rest"
-        prompt_value REST_URL "PAM-OS REST URL" "$REST_URL"
-        prompt_value REST_USERNAME "REST username" "$REST_USERNAME"
-        prompt_secret REST_PASSWORD "REST password" "$REST_PASSWORD"
+        configure_rest_runtime
         [[ -n "$REST_URL" ]] || die "REST URL must not be empty."
         return 0
         ;;
@@ -224,6 +389,7 @@ Examples:
   scripts/install-plugin-local.sh --no-init
 
 Options handled by this wrapper:
+  In interactive REST mode, existing installed skill REST settings are offered for reuse.
   --interactive      Do not pass --yes; allow the installer to prompt.
   --yes              Fully non-interactive legacy default: install codex with CLI mode.
   --non-interactive  Alias for --yes.
@@ -263,8 +429,36 @@ while [[ $# -gt 0 ]]; do
       PASSTHROUGH+=("$1" "$2")
       shift 2
       ;;
-    --rest-url|--rest-username|--rest-user|--rest-password)
+    --rest-url)
       [[ $# -ge 2 ]] || die "$1 requires a value"
+      REST_URL="$2"
+      REST_URL_EXPLICIT=1
+      PASSTHROUGH+=("$1" "$2")
+      shift 2
+      ;;
+    --rest-username|--rest-user)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      REST_USERNAME="$2"
+      REST_USERNAME_EXPLICIT=1
+      PASSTHROUGH+=("$1" "$2")
+      shift 2
+      ;;
+    --rest-password)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      REST_PASSWORD="$2"
+      REST_PASSWORD_EXPLICIT=1
+      PASSTHROUGH+=("$1" "$2")
+      shift 2
+      ;;
+    --codex-skill-dir)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      CODEX_SKILL_DIR="$2"
+      PASSTHROUGH+=("$1" "$2")
+      shift 2
+      ;;
+    --claude-skill-dir)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      CLAUDE_SKILL_DIR="$2"
       PASSTHROUGH+=("$1" "$2")
       shift 2
       ;;
