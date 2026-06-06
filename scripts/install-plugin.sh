@@ -258,7 +258,9 @@ load_existing_rest_config() {
   fi
   paths+=("$CODEX_SKILL_DIR/config.toml" "$CLAUDE_SKILL_DIR/config.toml")
 
-  mapfile -t output < <("$PYTHON_BIN" - "${paths[@]}" <<'PY'
+  while IFS= read -r line; do
+    output+=("$line")
+  done < <("$PYTHON_BIN" - "${paths[@]}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -1316,8 +1318,8 @@ REST_URL_EXPLICIT=0
 REST_USERNAME_EXPLICIT=0
 REST_PASSWORD_EXPLICIT=0
 [[ -n "${PAM_OS_REST_URL:-}" ]] && REST_URL_EXPLICIT=1
-[[ -v PAM_OS_REST_USERNAME ]] && REST_USERNAME_EXPLICIT=1
-[[ -v PAM_OS_REST_PASSWORD ]] && REST_PASSWORD_EXPLICIT=1
+[[ -n "${PAM_OS_REST_USERNAME+x}" ]] && REST_USERNAME_EXPLICIT=1
+[[ -n "${PAM_OS_REST_PASSWORD+x}" ]] && REST_PASSWORD_EXPLICIT=1
 EXISTING_REST_CONFIG_PATH=""
 EXISTING_REST_MODE=""
 EXISTING_REST_URL=""
