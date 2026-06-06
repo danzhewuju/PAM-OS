@@ -36,6 +36,27 @@ def test_rest_api_auth_enabled_requires_credentials():
         create_app(db_path=None, config=config)
 
 
+def test_rest_post_routes_parse_request_models_from_json_body(tmp_path):
+    app = create_app(db_path=tmp_path / "memory.sqlite3")
+    post_paths = [
+        "/memory/clear",
+        "/events",
+        "/context/prepare",
+        "/memory/capture",
+        "/behavior/choice",
+        "/turns/observe",
+        "/memory/consolidate",
+        "/context/compile",
+        "/reflect",
+    ]
+
+    for path in post_paths:
+        route = next(route for route in app.routes if getattr(route, "path", None) == path)
+
+        assert [param.name for param in route.dependant.body_params] == ["request"]
+        assert "request" not in [param.name for param in route.dependant.query_params]
+
+
 def test_clear_memory_rest_api_requires_confirmation(tmp_path):
     app = create_app(db_path=tmp_path / "memory.sqlite3")
     route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/clear")
