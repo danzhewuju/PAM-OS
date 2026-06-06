@@ -9,6 +9,7 @@ PLUGIN_NAME="${PAM_OS_PLUGIN_NAME:-pam-os-memory}"
 SOURCE_DIR="$REPO_ROOT/plugins/$PLUGIN_NAME"
 CODEX_SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/$PLUGIN_NAME"
 CLAUDE_SKILL_DIR="$HOME/.claude/skills/$PLUGIN_NAME"
+HERMES_SKILL_DIR="${HERMES_HOME:-$HOME/.hermes}/skills/$PLUGIN_NAME"
 
 ASSUME_YES=1
 HAS_TARGET=0
@@ -159,16 +160,19 @@ load_existing_rest_config() {
         codex)
           paths+=("$CODEX_SKILL_DIR/config.toml")
           ;;
-        claude|opencode|hermes)
+        claude|opencode)
           paths+=("$CLAUDE_SKILL_DIR/config.toml")
           ;;
+        hermes)
+          paths+=("$HERMES_SKILL_DIR/config.toml")
+          ;;
         all)
-          paths+=("$CODEX_SKILL_DIR/config.toml" "$CLAUDE_SKILL_DIR/config.toml")
+          paths+=("$CODEX_SKILL_DIR/config.toml" "$CLAUDE_SKILL_DIR/config.toml" "$HERMES_SKILL_DIR/config.toml")
           ;;
       esac
     done
   fi
-  paths+=("$CODEX_SKILL_DIR/config.toml" "$CLAUDE_SKILL_DIR/config.toml")
+  paths+=("$CODEX_SKILL_DIR/config.toml" "$CLAUDE_SKILL_DIR/config.toml" "$HERMES_SKILL_DIR/config.toml")
 
   while IFS= read -r line; do
     output+=("$line")
@@ -202,10 +206,12 @@ for raw_path in sys.argv[1:]:
     if not isinstance(url, str) or not url.strip():
         continue
     mode = data.get("mode", "")
+    if not isinstance(mode, str) or mode.strip().lower() != "rest":
+        continue
     username = rest.get("username", "")
     password = rest.get("password", "")
     print(str(path))
-    print(mode if isinstance(mode, str) else "")
+    print(mode)
     print(url)
     print(username if isinstance(username, str) else "")
     print(password if isinstance(password, str) else "")
@@ -285,7 +291,7 @@ select_install_targets() {
   ui_printf '  1) codex     - Codex plugin + MCP + global skill fallback\n'
   ui_printf '  2) claude    - Claude Code global skill + MCP\n'
   ui_printf '  3) opencode  - OpenCode guidance\n'
-  ui_printf '  4) hermes    - Hermes MCP config + guidance\n'
+  ui_printf '  4) hermes    - Hermes skill + MCP config + guidance\n'
   ui_printf '  5) all\n'
   ui_printf '\nSelect one or more targets, separated by commas or spaces.\n'
 
@@ -461,6 +467,12 @@ while [[ $# -gt 0 ]]; do
     --claude-skill-dir)
       [[ $# -ge 2 ]] || die "$1 requires a value"
       CLAUDE_SKILL_DIR="$2"
+      PASSTHROUGH+=("$1" "$2")
+      shift 2
+      ;;
+    --hermes-skill-dir)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      HERMES_SKILL_DIR="$2"
       PASSTHROUGH+=("$1" "$2")
       shift 2
       ;;

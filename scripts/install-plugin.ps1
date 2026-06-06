@@ -43,6 +43,7 @@ $DefaultOpenCodeAgentsFile = Join-PathMany @($AppDataDir, "opencode", "AGENTS.md
 $HermesHome = Get-EnvOrDefault "HERMES_HOME" (Join-Path $HomeDir ".hermes")
 $DefaultHermesConfig = Join-Path $HermesHome "config.yaml"
 $DefaultHermesAgentsFile = Join-Path $HermesHome "AGENTS.md"
+$DefaultHermesSkillDir = Join-PathMany @($HermesHome, "skills", $PluginName)
 
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { "" }
 $WorkDir = (Get-Location).Path
@@ -75,7 +76,7 @@ Options:
   --codex             Install the Codex plugin, global skill fallback, and MCP config.
   --claude            Install the Claude Code global skill.
   --opencode          Install OpenCode compatibility guidance and Claude-compatible skill.
-  --hermes            Install Hermes MCP config and guidance.
+  --hermes            Install Hermes skill, MCP config, and guidance.
   --all               Install all supported targets.
   --plugin-dir DIR    Destination plugin dir. Default: $DefaultPluginDir.
   --marketplace PATH  Personal marketplace path. Default: $DefaultMarketplacePath.
@@ -90,6 +91,8 @@ Options:
                       Hermes config.yaml path. Default: $DefaultHermesConfig.
   --hermes-agents PATH
                       Hermes AGENTS.md path. Default: $DefaultHermesAgentsFile.
+  --hermes-skill-dir DIR
+                      Hermes skill dir. Default: $DefaultHermesSkillDir.
   --repo-dir DIR      Use an existing PAM-OS repo for MCP/dev mode. Default: $DefaultRepoDir.
   --repo-url URL      Git repository used to refresh the managed repo. Default: $DefaultRepoUrl.
   --ref REF           Git ref used to refresh the managed repo. Default: master.
@@ -1073,6 +1076,7 @@ Marketplace:
 Skill paths:
   $($script:CodexSkillDir)
   $($script:ClaudeSkillDir)
+  $($script:HermesSkillDir)
 
 Guidance/config:
   $($script:OpenCodeAgentsFile)
@@ -1115,6 +1119,7 @@ Marketplace:
 Skill paths:
   $($script:CodexSkillDir)
   $($script:ClaudeSkillDir)
+  $($script:HermesSkillDir)
 
 Guidance/config:
   $($script:OpenCodeAgentsFile)
@@ -1151,6 +1156,7 @@ try {
     $script:OpenCodeAgentsFile = $DefaultOpenCodeAgentsFile
     $script:HermesConfig = $DefaultHermesConfig
     $script:HermesAgentsFile = $DefaultHermesAgentsFile
+    $script:HermesSkillDir = $DefaultHermesSkillDir
     $script:RepoUrl = $DefaultRepoUrl
     $script:RepoRef = $DefaultRepoRef
     $script:RepoDir = $DefaultRepoDir
@@ -1223,6 +1229,10 @@ try {
             "--hermes-agents" {
                 $i++
                 $script:HermesAgentsFile = Get-OptionValue $arg $i
+            }
+            "--hermes-skill-dir" {
+                $i++
+                $script:HermesSkillDir = Get-OptionValue $arg $i
             }
             "--repo-dir" {
                 $i++
@@ -1308,6 +1318,7 @@ try {
         @("--opencode-agents", $script:OpenCodeAgentsFile),
         @("--hermes-config", $script:HermesConfig),
         @("--hermes-agents", $script:HermesAgentsFile),
+        @("--hermes-skill-dir", $script:HermesSkillDir),
         @("--repo-url", $script:RepoUrl),
         @("--ref", $script:RepoRef),
         @("--repo-dir", $script:RepoDir),
@@ -1385,6 +1396,7 @@ try {
     $script:OpenCodeAgentsFile = Resolve-AbsolutePath $script:OpenCodeAgentsFile
     $script:HermesConfig = Resolve-AbsolutePath $script:HermesConfig
     $script:HermesAgentsFile = Resolve-AbsolutePath $script:HermesAgentsFile
+    $script:HermesSkillDir = Resolve-AbsolutePath $script:HermesSkillDir
     if (-not [string]::IsNullOrWhiteSpace($script:SourceDir)) {
         $script:SourceDir = Resolve-AbsolutePath $script:SourceDir
     }
@@ -1461,6 +1473,7 @@ try {
 
     if ($script:InstallHermes) {
         Write-Info "Installing Hermes compatibility"
+        Install-GlobalSkill $skillSource $script:HermesSkillDir "Hermes skill"
         if ($script:WriteMcpConfig) {
             if ($script:InstallMode -eq "cli") {
                 Write-HermesMcpConfig $script:HermesConfig
@@ -1471,7 +1484,7 @@ try {
                 Write-Host "Removed PAM-OS MCP server from: $($script:HermesConfig)"
             }
         }
-        Update-ManagedGuidance $script:HermesAgentsFile (Join-Path $skillSource "SKILL.md")
+        Update-ManagedGuidance $script:HermesAgentsFile (Join-Path $script:HermesSkillDir "SKILL.md")
         Write-Host "Updated: $($script:HermesAgentsFile)"
     }
 

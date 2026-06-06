@@ -16,6 +16,7 @@ DEFAULT_CLAUDE_MCP_SCOPE="${PAM_OS_CLAUDE_MCP_SCOPE:-user}"
 DEFAULT_OPENCODE_AGENTS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/AGENTS.md"
 DEFAULT_HERMES_CONFIG="${HERMES_HOME:-$HOME/.hermes}/config.yaml"
 DEFAULT_HERMES_AGENTS_FILE="${HERMES_HOME:-$HOME/.hermes}/AGENTS.md"
+DEFAULT_HERMES_SKILL_DIR="${HERMES_HOME:-$HOME/.hermes}/skills/$PLUGIN_NAME"
 MCP_SERVER_NAME="pam_os_memory"
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
@@ -51,7 +52,7 @@ Options:
   --codex             Install the Codex plugin, global skill fallback, and MCP config.
   --claude            Install the Claude Code global skill and MCP config.
   --opencode          Install OpenCode compatibility guidance and Claude-compatible skill.
-  --hermes            Install Hermes MCP config and guidance.
+  --hermes            Install Hermes skill, MCP config, and guidance.
   --all               Install all supported targets.
   --plugin-dir DIR      Destination plugin dir. Default: ~/plugins/pam-os-memory.
   --marketplace PATH    Personal marketplace path. Default: ~/.agents/plugins/marketplace.json.
@@ -66,6 +67,8 @@ Options:
                       Hermes config.yaml path. Default: ~/.hermes/config.yaml.
   --hermes-agents PATH
                       Hermes AGENTS.md path. Default: ~/.hermes/AGENTS.md.
+  --hermes-skill-dir DIR
+                      Hermes skill dir. Default: ~/.hermes/skills/pam-os-memory.
   --repo-dir DIR        Use an existing PAM-OS repo for MCP/dev mode. Default: managed repo ~/.local/share/pam-os/repo.
   --repo-url URL        Git repository used to refresh the managed repo. Default: https://github.com/danzhewuju/PAM-OS.git.
   --ref REF             Git ref used to refresh the managed repo. Default: master.
@@ -290,10 +293,12 @@ for raw_path in sys.argv[1:]:
     if not isinstance(url, str) or not url.strip():
         continue
     mode = data.get("mode", "")
+    if not isinstance(mode, str) or mode.strip().lower() != "rest":
+        continue
     username = rest.get("username", "")
     password = rest.get("password", "")
     print(str(path))
-    print(mode if isinstance(mode, str) else "")
+    print(mode)
     print(url)
     print(username if isinstance(username, str) else "")
     print(password if isinstance(password, str) else "")
@@ -1087,6 +1092,7 @@ install_hermes() {
   local skill_src="$1"
 
   info "Installing Hermes compatibility"
+  install_global_skill "$skill_src" "$HERMES_SKILL_DIR" "Hermes skill"
   if [[ "$WRITE_MCP_CONFIG" == "1" ]]; then
     if [[ "$INSTALL_MODE" == "cli" ]]; then
       write_hermes_mcp_config "$HERMES_CONFIG"
@@ -1096,7 +1102,7 @@ install_hermes() {
       printf 'Removed PAM-OS MCP server from: %s\n' "$HERMES_CONFIG"
     fi
   fi
-  append_managed_guidance "$HERMES_AGENTS_FILE" "$skill_src/SKILL.md"
+  append_managed_guidance "$HERMES_AGENTS_FILE" "$HERMES_SKILL_DIR/SKILL.md"
   printf 'Updated: %s\n' "$HERMES_AGENTS_FILE"
 }
 
@@ -1304,6 +1310,7 @@ CLAUDE_MCP_SCOPE="$DEFAULT_CLAUDE_MCP_SCOPE"
 OPENCODE_AGENTS_FILE="$DEFAULT_OPENCODE_AGENTS_FILE"
 HERMES_CONFIG="$DEFAULT_HERMES_CONFIG"
 HERMES_AGENTS_FILE="$DEFAULT_HERMES_AGENTS_FILE"
+HERMES_SKILL_DIR="$DEFAULT_HERMES_SKILL_DIR"
 REPO_URL="$DEFAULT_REPO_URL"
 REPO_REF="$DEFAULT_REPO_REF"
 REPO_DIR="$DEFAULT_REPO_DIR"
@@ -1399,6 +1406,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --hermes-agents)
       HERMES_AGENTS_FILE="${2:-}"
+      shift 2
+      ;;
+    --hermes-skill-dir)
+      HERMES_SKILL_DIR="${2:-}"
       shift 2
       ;;
     --repo-dir)
@@ -1497,6 +1508,7 @@ done
 [[ -n "$OPENCODE_AGENTS_FILE" ]] || die "--opencode-agents must not be empty."
 [[ -n "$HERMES_CONFIG" ]] || die "--hermes-config must not be empty."
 [[ -n "$HERMES_AGENTS_FILE" ]] || die "--hermes-agents must not be empty."
+[[ -n "$HERMES_SKILL_DIR" ]] || die "--hermes-skill-dir must not be empty."
 [[ -n "$REPO_URL" ]] || die "--repo-url must not be empty."
 [[ -n "$REPO_REF" ]] || die "--ref must not be empty."
 [[ -n "$REPO_DIR" ]] || die "--repo-dir must not be empty."
@@ -1647,6 +1659,7 @@ Marketplace:
 Skill paths:
   $CODEX_SKILL_DIR
   $CLAUDE_SKILL_DIR
+  $HERMES_SKILL_DIR
 
 Guidance/config:
   $OPENCODE_AGENTS_FILE
@@ -1685,6 +1698,7 @@ Marketplace:
 Skill paths:
   $CODEX_SKILL_DIR
   $CLAUDE_SKILL_DIR
+  $HERMES_SKILL_DIR
 
 Guidance/config:
   $OPENCODE_AGENTS_FILE
