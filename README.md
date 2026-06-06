@@ -356,6 +356,43 @@ Core endpoints:
 | `POST` | `/memory/clear`               | Clear all memory data with confirmation.               |
 
 
+### Docker Deployment
+
+Build the image from this checkout:
+
+```bash
+docker build -t pam-os .
+```
+
+The default base image uses the DaoCloud mirror for Docker Hub. To use another
+base image source:
+
+```bash
+docker build \
+  --build-arg PYTHON_BASE_IMAGE=python:3.12-slim \
+  --build-arg PIP_INDEX_URL=https://pypi.org/simple \
+  -t pam-os .
+```
+
+Run the REST API on a server with SQLite persisted in a Docker volume:
+
+```bash
+docker volume create pam-os-data
+docker run -d --name pam-os \
+  -p 8765:8765 \
+  -v pam-os-data:/data \
+  -e PAM_OS_AUTH_ENABLED=true \
+  -e PAM_OS_AUTH_USERNAME=user \
+  -e PAM_OS_AUTH_PASSWORD=change-me \
+  pam-os
+```
+
+The container listens on `0.0.0.0:8765` by default and stores data at `/data/memory.sqlite3`. Use Basic Auth when exposing the service beyond localhost.
+
+```bash
+curl -u user:change-me http://SERVER_IP:8765/health
+```
+
 ## Configuration
 
 Copy the example config:
@@ -375,6 +412,8 @@ Common environment variables:
 ```bash
 export PAM_OS_DB="$HOME/.pam-os/memory.sqlite3"
 export PAM_OS_CONFIG="/path/to/pam-os.toml"
+export PAM_OS_HOST="0.0.0.0"
+export PAM_OS_PORT="8765"
 export PAM_OS_AUTH_ENABLED="true"
 export PAM_OS_AUTH_USERNAME="user"
 export PAM_OS_AUTH_PASSWORD="change-me"

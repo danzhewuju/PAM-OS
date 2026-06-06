@@ -10,9 +10,15 @@ SOURCE_DIR="$REPO_ROOT/plugins/$PLUGIN_NAME"
 
 ASSUME_YES=1
 HAS_TARGET=0
+HAS_MODE=0
 PROMPT_TARGET=1
+PROMPT_MODE=1
 PASSTHROUGH=()
 SELECTED_TARGETS=()
+SELECTED_MODE=""
+REST_URL="${PAM_OS_REST_URL:-http://127.0.0.1:8765}"
+REST_USERNAME="${PAM_OS_REST_USERNAME:-}"
+REST_PASSWORD="${PAM_OS_REST_PASSWORD:-}"
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -48,6 +54,59 @@ read_user() {
   fi
 
   return 1
+}
+
+read_secret_user() {
+  local __result_var="$1"
+  local prompt="$2"
+
+  printf -v "$__result_var" '%s' ''
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    printf '%s' "$prompt" > /dev/tty
+    if read -r -s "$__result_var" < /dev/tty; then
+      printf '\n' > /dev/tty
+      return 0
+    fi
+  fi
+
+  if [[ -t 0 ]] && read -r -s -p "$prompt" "$__result_var"; then
+    printf '\n' >&2
+    return 0
+  fi
+
+  return 1
+}
+
+prompt_value() {
+  local __result_var="$1"
+  local prompt="$2"
+  local default="$3"
+  local reply rendered_prompt
+
+  if [[ -n "$default" ]]; then
+    rendered_prompt="$prompt [$default]: "
+  else
+    rendered_prompt="$prompt (leave empty for none): "
+  fi
+
+  if ! read_user reply "$rendered_prompt"; then
+    die "Interactive REST configuration requires a TTY. Re-run with --mode and REST options, or --yes."
+  fi
+
+  printf -v "$__result_var" '%s' "${reply:-$default}"
+}
+
+prompt_secret() {
+  local __result_var="$1"
+  local prompt="$2"
+  local default="$3"
+  local reply
+
+  if ! read_secret_user reply "$prompt (leave empty for none): "; then
+    die "Interactive REST configuration requires a TTY. Re-run with --mode and REST options, or --yes."
+  fi
+
+  printf -v "$__result_var" '%s' "${reply:-$default}"
 }
 
 select_install_targets() {
@@ -104,6 +163,39 @@ select_install_targets() {
   done
 }
 
+select_runtime_mode() {
+  local mode_choice
+
+  ui_printf '\nRuntime mode:\n'
+  ui_printf '  1) cli  - no long-running server; model runs the local memory CLI\n'
+  ui_printf '  2) rest - model calls a running PAM-OS REST server\n'
+
+  while true; do
+    if ! read_user mode_choice 'Selection [1]: '; then
+      die "Interactive runtime mode selection requires a TTY. Re-run with --mode cli, --mode rest, or --yes."
+    fi
+
+    mode_choice="${mode_choice:-1}"
+    case "$mode_choice" in
+      1|cli|CLI)
+        SELECTED_MODE="cli"
+        return 0
+        ;;
+      2|rest|REST)
+        SELECTED_MODE="rest"
+        prompt_value REST_URL "PAM-OS REST URL" "$REST_URL"
+        prompt_value REST_USERNAME "REST username" "$REST_USERNAME"
+        prompt_secret REST_PASSWORD "REST password" "$REST_PASSWORD"
+        [[ -n "$REST_URL" ]] || die "REST URL must not be empty."
+        return 0
+        ;;
+      *)
+        ui_printf 'Invalid runtime mode: %s\n' "$mode_choice"
+        ;;
+    esac
+  done
+}
+
 usage() {
   cat <<USAGE
 PAM-OS local plugin installer
@@ -133,7 +225,7 @@ Examples:
 
 Options handled by this wrapper:
   --interactive      Do not pass --yes; allow the installer to prompt.
-  --yes              Fully non-interactive legacy default: install codex.
+  --yes              Fully non-interactive legacy default: install codex with CLI mode.
   --non-interactive  Alias for --yes.
   --installer-help   Show scripts/install-plugin.sh help.
   -h, --help         Show this help.
@@ -147,11 +239,13 @@ while [[ $# -gt 0 ]]; do
     --interactive)
       ASSUME_YES=0
       PROMPT_TARGET=0
+      PROMPT_MODE=0
       shift
       ;;
     --yes|--non-interactive)
       ASSUME_YES=1
       PROMPT_TARGET=0
+      PROMPT_MODE=0
       shift
       ;;
     --installer-help)
@@ -160,6 +254,17 @@ while [[ $# -gt 0 ]]; do
     --target)
       [[ $# -ge 2 ]] || die "--target requires a value"
       HAS_TARGET=1
+      PASSTHROUGH+=("$1" "$2")
+      shift 2
+      ;;
+    --mode|--runtime)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      HAS_MODE=1
+      PASSTHROUGH+=("$1" "$2")
+      shift 2
+      ;;
+    --rest-url|--rest-username|--rest-user|--rest-password)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
       PASSTHROUGH+=("$1" "$2")
       shift 2
       ;;
@@ -203,6 +308,18 @@ if [[ "$HAS_TARGET" != "1" ]]; then
     done
   elif [[ "$ASSUME_YES" == "1" ]]; then
     args+=("--target" "codex")
+  fi
+fi
+
+if [[ "$HAS_MODE" != "1" ]]; then
+  if [[ "$PROMPT_MODE" == "1" && can_prompt ]]; then
+    select_runtime_mode
+    args+=("--mode" "$SELECTED_MODE")
+    if [[ "$SELECTED_MODE" == "rest" ]]; then
+      export PAM_OS_REST_URL="$REST_URL"
+      export PAM_OS_REST_USERNAME="$REST_USERNAME"
+      export PAM_OS_REST_PASSWORD="$REST_PASSWORD"
+    fi
   fi
 fi
 

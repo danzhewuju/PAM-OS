@@ -11,9 +11,15 @@ $SourceDir = Join-Path (Join-Path $RepoRoot "plugins") $PluginName
 
 $AssumeYes = $true
 $HasTarget = $false
+$HasMode = $false
 $PromptTarget = $true
+$PromptMode = $true
 $Passthrough = @()
 $SelectedTargets = @()
+$SelectedMode = ""
+$RestUrl = if ([string]::IsNullOrWhiteSpace($env:PAM_OS_REST_URL)) { "http://127.0.0.1:8765" } else { $env:PAM_OS_REST_URL }
+$RestUsername = if ([string]::IsNullOrWhiteSpace($env:PAM_OS_REST_USERNAME)) { "" } else { $env:PAM_OS_REST_USERNAME }
+$RestPassword = if ([string]::IsNullOrWhiteSpace($env:PAM_OS_REST_PASSWORD)) { "" } else { $env:PAM_OS_REST_PASSWORD }
 
 function Stop-LocalInstall {
     param([string]$Message)
@@ -36,6 +42,42 @@ function Read-User {
         Stop-LocalInstall "Interactive target selection requires a user session. Re-run with --target, --all, or --yes."
     }
     return Read-Host $Prompt
+}
+
+function Prompt-Value {
+    param(
+        [string]$Prompt,
+        [string]$Default
+    )
+    $promptText = if ([string]::IsNullOrWhiteSpace($Default)) {
+        "$Prompt (leave empty for none)"
+    } else {
+        "$Prompt [$Default]"
+    }
+    $reply = Read-User $promptText
+    if ([string]::IsNullOrWhiteSpace($reply)) {
+        return $Default
+    }
+    return $reply
+}
+
+function Prompt-Secret {
+    param(
+        [string]$Prompt,
+        [string]$Default
+    )
+    $secure = Read-Host "$Prompt (leave empty for none)" -AsSecureString
+    if ($secure.Length -eq 0) {
+        return $Default
+    }
+
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try {
+        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    }
+    finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
 }
 
 function Select-InstallTargets {
@@ -96,6 +138,52 @@ function Select-InstallTargets {
     }
 }
 
+function Select-RuntimeMode {
+    Write-Host ""
+    Write-Host "Runtime mode:"
+    Write-Host "  1) cli  - no long-running server; model runs the local memory CLI"
+    Write-Host "  2) rest - model calls a running PAM-OS REST server"
+
+    while ($true) {
+        $modeChoice = Read-User "Selection [1]"
+        if ([string]::IsNullOrWhiteSpace($modeChoice)) {
+            $modeChoice = "1"
+        }
+
+        switch ($modeChoice) {
+            "1" {
+                $script:SelectedMode = "cli"
+                return
+            }
+            "cli" {
+                $script:SelectedMode = "cli"
+                return
+            }
+            "2" {
+                $script:SelectedMode = "rest"
+                $script:RestUrl = Prompt-Value "PAM-OS REST URL" $script:RestUrl
+                $script:RestUsername = Prompt-Value "REST username" $script:RestUsername
+                $script:RestPassword = Prompt-Secret "REST password" $script:RestPassword
+                if ([string]::IsNullOrWhiteSpace($script:RestUrl)) {
+                    Stop-LocalInstall "REST URL must not be empty."
+                }
+                return
+            }
+            "rest" {
+                $script:SelectedMode = "rest"
+                $script:RestUrl = Prompt-Value "PAM-OS REST URL" $script:RestUrl
+                $script:RestUsername = Prompt-Value "REST username" $script:RestUsername
+                $script:RestPassword = Prompt-Secret "REST password" $script:RestPassword
+                if ([string]::IsNullOrWhiteSpace($script:RestUrl)) {
+                    Stop-LocalInstall "REST URL must not be empty."
+                }
+                return
+            }
+            default { Write-Warning "Invalid runtime mode: $modeChoice" }
+        }
+    }
+}
+
 function Show-Usage {
     @"
 PAM-OS local plugin installer for Windows
@@ -126,7 +214,7 @@ Examples:
 
 Options handled by this wrapper:
   --interactive      Do not pass --yes; allow the installer to prompt.
-  --yes              Fully non-interactive legacy default: install codex.
+  --yes              Fully non-interactive legacy default: install codex with CLI mode.
   --non-interactive  Alias for --yes.
   --installer-help   Show scripts\install-plugin.ps1 help.
   -h, --help         Show this help.
@@ -141,14 +229,17 @@ for ($i = 0; $i -lt $CliArgs.Count; $i++) {
         "--interactive" {
             $AssumeYes = $false
             $PromptTarget = $false
+            $PromptMode = $false
         }
         "--yes" {
             $AssumeYes = $true
             $PromptTarget = $false
+            $PromptMode = $false
         }
         "--non-interactive" {
             $AssumeYes = $true
             $PromptTarget = $false
+            $PromptMode = $false
         }
         "--installer-help" {
             if (-not (Test-Path -LiteralPath $Installer -PathType Leaf)) {
@@ -162,6 +253,56 @@ for ($i = 0; $i -lt $CliArgs.Count; $i++) {
                 Stop-LocalInstall "--target requires a value"
             }
             $HasTarget = $true
+            $Passthrough += $arg
+            $i++
+            $Passthrough += $CliArgs[$i]
+        }
+        "--mode" {
+            if ($i + 1 -ge $CliArgs.Count -or [string]::IsNullOrWhiteSpace($CliArgs[$i + 1]) -or $CliArgs[$i + 1].StartsWith("-")) {
+                Stop-LocalInstall "--mode requires a value"
+            }
+            $HasMode = $true
+            $Passthrough += $arg
+            $i++
+            $Passthrough += $CliArgs[$i]
+        }
+        "--runtime" {
+            if ($i + 1 -ge $CliArgs.Count -or [string]::IsNullOrWhiteSpace($CliArgs[$i + 1]) -or $CliArgs[$i + 1].StartsWith("-")) {
+                Stop-LocalInstall "--runtime requires a value"
+            }
+            $HasMode = $true
+            $Passthrough += $arg
+            $i++
+            $Passthrough += $CliArgs[$i]
+        }
+        "--rest-url" {
+            if ($i + 1 -ge $CliArgs.Count -or [string]::IsNullOrWhiteSpace($CliArgs[$i + 1]) -or $CliArgs[$i + 1].StartsWith("-")) {
+                Stop-LocalInstall "--rest-url requires a value"
+            }
+            $Passthrough += $arg
+            $i++
+            $Passthrough += $CliArgs[$i]
+        }
+        "--rest-username" {
+            if ($i + 1 -ge $CliArgs.Count -or $CliArgs[$i + 1].StartsWith("-")) {
+                Stop-LocalInstall "--rest-username requires a value"
+            }
+            $Passthrough += $arg
+            $i++
+            $Passthrough += $CliArgs[$i]
+        }
+        "--rest-user" {
+            if ($i + 1 -ge $CliArgs.Count -or $CliArgs[$i + 1].StartsWith("-")) {
+                Stop-LocalInstall "--rest-user requires a value"
+            }
+            $Passthrough += $arg
+            $i++
+            $Passthrough += $CliArgs[$i]
+        }
+        "--rest-password" {
+            if ($i + 1 -ge $CliArgs.Count -or $CliArgs[$i + 1].StartsWith("-")) {
+                Stop-LocalInstall "--rest-password requires a value"
+            }
             $Passthrough += $arg
             $i++
             $Passthrough += $CliArgs[$i]
@@ -223,6 +364,18 @@ if (-not $HasTarget) {
     }
     elseif ($AssumeYes) {
         $InstallerArgs += @("--target", "codex")
+    }
+}
+
+if (-not $HasMode) {
+    if ($PromptMode -and (Test-CanPrompt)) {
+        Select-RuntimeMode
+        $InstallerArgs += @("--mode", $SelectedMode)
+        if ($SelectedMode -eq "rest") {
+            $env:PAM_OS_REST_URL = $RestUrl
+            $env:PAM_OS_REST_USERNAME = $RestUsername
+            $env:PAM_OS_REST_PASSWORD = $RestPassword
+        }
     }
 }
 

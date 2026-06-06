@@ -137,8 +137,8 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
     return AppConfig(
         storage=StorageConfig(db_path=db_path),
         server=ServerConfig(
-            host=config.server.host,
-            port=config.server.port,
+            host=os.environ.get("PAM_OS_HOST", config.server.host),
+            port=_env_int("PAM_OS_PORT", config.server.port),
             auth_enabled=_env_bool("PAM_OS_AUTH_ENABLED", config.server.auth_enabled),
             auth_username=os.environ.get("PAM_OS_AUTH_USERNAME", config.server.auth_username),
             auth_password=os.environ.get("PAM_OS_AUTH_PASSWORD", config.server.auth_password),
@@ -167,6 +167,16 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
 
 
 def _resolve_path(path: str) -> Path:

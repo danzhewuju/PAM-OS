@@ -69,6 +69,11 @@ Options:
   --repo-dir DIR        Use an existing PAM-OS repo for MCP/dev mode. Default: managed repo ~/.local/share/pam-os/repo.
   --repo-url URL        Git repository used to refresh the managed repo. Default: https://github.com/danzhewuju/PAM-OS.git.
   --ref REF             Git ref used to refresh the managed repo. Default: master.
+  --mode cli|rest       Set skill fallback runtime mode. Default: prompt, then cli.
+  --runtime cli|rest    Alias for --mode.
+  --rest-url URL        PAM-OS REST server URL. Default: http://127.0.0.1:8765.
+  --rest-username USER  REST Basic Auth username. Default: empty.
+  --rest-password PASS  REST Basic Auth password. Default: empty.
   --no-refresh          Do not fetch or clone the managed repo before installing.
   --db PATH             PAM-OS SQLite database path. Default: ~/.pam-os/memory.sqlite3.
   --python VERSION      Python version for uv run --python. Default: 3.12.
@@ -140,6 +145,27 @@ read_user() {
   return 1
 }
 
+read_secret_user() {
+  local __result_var="$1"
+  local prompt="$2"
+
+  printf -v "$__result_var" '%s' ''
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    printf '%s' "$prompt" > /dev/tty
+    if read -r -s "$__result_var" < /dev/tty; then
+      printf '\n' > /dev/tty
+      return 0
+    fi
+  fi
+
+  if [[ -t 0 ]] && read -r -s -p "$prompt" "$__result_var"; then
+    printf '\n' >&2
+    return 0
+  fi
+
+  return 1
+}
+
 confirm() {
   local prompt="$1"
   local default="${2:-y}"
@@ -170,6 +196,50 @@ confirm() {
       *) printf 'Please answer y or n.\n' ;;
     esac
   done
+}
+
+prompt_value() {
+  local prompt="$1"
+  local default="$2"
+  local reply rendered_prompt
+
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    printf '%s' "$default"
+    return 0
+  fi
+
+  if [[ -n "$default" ]]; then
+    rendered_prompt="$prompt [$default]: "
+  else
+    rendered_prompt="$prompt (leave empty for none): "
+  fi
+
+  if ! read_user reply "$rendered_prompt"; then
+    if is_pipe_install; then
+      pipe_install_hint
+    fi
+    die "Interactive prompt requires a TTY. Pass an explicit option or use --yes."
+  fi
+  printf '%s' "${reply:-$default}"
+}
+
+prompt_secret() {
+  local prompt="$1"
+  local default="$2"
+  local reply
+
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    printf '%s' "$default"
+    return 0
+  fi
+
+  if ! read_secret_user reply "$prompt (leave empty for none): "; then
+    if is_pipe_install; then
+      pipe_install_hint
+    fi
+    die "Interactive prompt requires a TTY. Pass explicit REST options or use --yes."
+  fi
+  printf '%s' "${reply:-$default}"
 }
 
 select_install_targets() {
@@ -574,17 +644,20 @@ write_claude_mcp_config() {
 
 write_skill_config() {
   local path="$1"
-  local escaped_python escaped_repo_dir escaped_db_path
+  local escaped_url escaped_user escaped_pass escaped_python escaped_repo_dir escaped_db_path
 
+  escaped_url="$(toml_escape "$REST_URL")"
+  escaped_user="$(toml_escape "$REST_USERNAME")"
+  escaped_pass="$(toml_escape "$REST_PASSWORD")"
   escaped_python="$(toml_escape "$PYTHON_VERSION")"
   escaped_repo_dir="$(toml_escape "$REPO_DIR")"
   escaped_db_path="$(toml_escape "$DB_PATH")"
 
   cat > "$path" <<CONFIG
 # PAM-OS skill runtime mode.
-# Default is CLI. The Codex plugin also registers MCP tools separately.
+# Default is CLI. Change mode to "rest" when the REST server is running.
 
-mode = "cli"
+mode = "$INSTALL_MODE"
 
 [cli]
 python = "$escaped_python"
@@ -593,14 +666,14 @@ repo_dir = "$escaped_repo_dir"
 db_path = "$escaped_db_path"
 
 [rest]
-url = "http://127.0.0.1:8765"
-username = ""
-password = ""
+url = "$escaped_url"
+username = "$escaped_user"
+password = "$escaped_pass"
 CONFIG
 }
 
 run_cli_init() {
-  if [[ "$RUN_INIT" != "1" ]]; then
+  if [[ "$INSTALL_MODE" != "cli" || "$RUN_INIT" != "1" ]]; then
     return 0
   fi
 
@@ -989,6 +1062,11 @@ REPO_REF="$DEFAULT_REPO_REF"
 REPO_DIR="$DEFAULT_REPO_DIR"
 REPO_DIR_EXPLICIT=0
 REFRESH_REPO=1
+MODE_ARG=""
+INSTALL_MODE=""
+REST_URL="${PAM_OS_REST_URL:-http://127.0.0.1:8765}"
+REST_USERNAME="${PAM_OS_REST_USERNAME:-}"
+REST_PASSWORD="${PAM_OS_REST_PASSWORD:-}"
 DB_PATH="$DEFAULT_DB_PATH"
 PYTHON_VERSION="${PAM_OS_CLI_PYTHON:-3.12}"
 UV_BIN="${PAM_OS_UV_BIN:-}"
@@ -1079,6 +1157,22 @@ while [[ $# -gt 0 ]]; do
       REPO_REF="${2:-}"
       shift 2
       ;;
+    --mode|--runtime)
+      MODE_ARG="${2:-}"
+      shift 2
+      ;;
+    --rest-url)
+      REST_URL="${2:-}"
+      shift 2
+      ;;
+    --rest-username|--rest-user)
+      REST_USERNAME="${2:-}"
+      shift 2
+      ;;
+    --rest-password)
+      REST_PASSWORD="${2:-}"
+      shift 2
+      ;;
     --no-refresh)
       REFRESH_REPO=0
       shift
@@ -1147,6 +1241,9 @@ done
 [[ -n "$REPO_DIR" ]] || die "--repo-dir must not be empty."
 [[ -n "$DB_PATH" ]] || die "--db must not be empty."
 [[ -n "$PYTHON_VERSION" ]] || die "--python must not be empty."
+if [[ -n "$MODE_ARG" && "$MODE_ARG" != "cli" && "$MODE_ARG" != "rest" ]]; then
+  die "--mode must be cli or rest."
+fi
 
 if [[ "$ASSUME_YES" == "0" && ! can_prompt ]]; then
   die "Interactive install requires a TTY. Use --yes for non-interactive installs."
@@ -1163,6 +1260,38 @@ fi
 if [[ "$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE$INSTALL_HERMES" == "0000" ]]; then
   die "No install targets selected."
 fi
+
+if [[ -z "$MODE_ARG" ]]; then
+  if [[ "$ASSUME_YES" == "1" ]]; then
+    INSTALL_MODE="cli"
+  else
+    printf '\nRuntime mode:\n'
+    printf '  1) cli  - no long-running server; model runs the local memory CLI\n'
+    printf '  2) rest - model calls a running PAM-OS REST server\n'
+    if ! read_user mode_choice 'Selection [1]: '; then
+      if is_pipe_install; then
+        pipe_install_hint
+      fi
+      die "Interactive runtime mode selection requires a TTY. Pass --mode cli or --mode rest."
+    fi
+    mode_choice="${mode_choice:-1}"
+    case "$mode_choice" in
+      1|cli|CLI) INSTALL_MODE="cli" ;;
+      2|rest|REST) INSTALL_MODE="rest" ;;
+      *) die "Invalid runtime mode: $mode_choice" ;;
+    esac
+  fi
+else
+  INSTALL_MODE="$MODE_ARG"
+fi
+
+if [[ "$INSTALL_MODE" == "rest" ]]; then
+  REST_URL="$(prompt_value "PAM-OS REST URL" "$REST_URL")"
+  REST_USERNAME="$(prompt_value "REST username" "$REST_USERNAME")"
+  REST_PASSWORD="$(prompt_secret "REST password" "$REST_PASSWORD")"
+fi
+
+[[ -n "$REST_URL" ]] || die "--rest-url must not be empty when --mode rest is selected."
 
 if [[ -n "$UV_BIN" ]]; then
   [[ -x "$UV_BIN" ]] || die "--uv-bin must point to an executable uv binary: $UV_BIN"
@@ -1262,6 +1391,10 @@ MCP command:
 
 Runtime:
   $RUNTIME_LABEL
+
+Skill fallback runtime:
+  mode: $INSTALL_MODE
+  REST URL: $REST_URL
 
 MCP environment:
   $MCP_ENV_JSON

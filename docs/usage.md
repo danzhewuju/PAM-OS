@@ -179,6 +179,8 @@ CLI arguments > environment variables > config/pam-os.toml > built-in defaults
 ```bash
 export PAM_OS_DB="/path/to/memory.sqlite3"
 export PAM_OS_CONFIG="/path/to/pam-os.toml"
+export PAM_OS_HOST="0.0.0.0"
+export PAM_OS_PORT="8765"
 ```
 
 主要配置段：
@@ -368,6 +370,40 @@ uv run --python 3.12 --extra api memory serve --host 127.0.0.1 --port 8765
 | `POST` | `/reflect` | 最近记忆反思上下文。 |
 | `GET` | `/storage/stats` | 查看存储概览。 |
 | `POST` | `/memory/clear` | 清空所有记忆数据（需 `confirm: true`）。 |
+
+### 8.1 Docker 部署
+
+当前仓库提供 `Dockerfile`，镜像默认启动 REST API，监听 `0.0.0.0:8765`，并将 SQLite 数据库放在 `/data/memory.sqlite3`。
+
+```bash
+docker build -t pam-os .
+```
+
+默认基础镜像使用 DaoCloud 的 Docker Hub 国内镜像。如果需要切换成其他基础镜像源：
+
+```bash
+docker build \
+  --build-arg PYTHON_BASE_IMAGE=python:3.12-slim \
+  --build-arg PIP_INDEX_URL=https://pypi.org/simple \
+  -t pam-os .
+```
+
+```bash
+docker volume create pam-os-data
+docker run -d --name pam-os \
+  -p 8765:8765 \
+  -v pam-os-data:/data \
+  -e PAM_OS_AUTH_ENABLED=true \
+  -e PAM_OS_AUTH_USERNAME=user \
+  -e PAM_OS_AUTH_PASSWORD=change-me \
+  pam-os
+```
+
+远程机器访问时使用服务器地址，并带上 Basic Auth：
+
+```bash
+curl -u user:change-me http://SERVER_IP:8765/health
+```
 
 ## 9. Python API
 

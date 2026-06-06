@@ -351,6 +351,42 @@ curl http://127.0.0.1:8765/health
 | `POST` | `/reflect` | 将近期记忆总结为上下文。 |
 | `POST` | `/memory/clear` | 经确认后清空全部记忆数据。 |
 
+### Docker 部署
+
+从当前 checkout 构建镜像：
+
+```bash
+docker build -t pam-os .
+```
+
+默认基础镜像使用 DaoCloud 的 Docker Hub 国内镜像。如果需要切换成其他基础镜像源：
+
+```bash
+docker build \
+  --build-arg PYTHON_BASE_IMAGE=python:3.12-slim \
+  --build-arg PIP_INDEX_URL=https://pypi.org/simple \
+  -t pam-os .
+```
+
+在服务器上启动 REST API，并用 Docker volume 持久化 SQLite：
+
+```bash
+docker volume create pam-os-data
+docker run -d --name pam-os \
+  -p 8765:8765 \
+  -v pam-os-data:/data \
+  -e PAM_OS_AUTH_ENABLED=true \
+  -e PAM_OS_AUTH_USERNAME=user \
+  -e PAM_OS_AUTH_PASSWORD=change-me \
+  pam-os
+```
+
+容器默认监听 `0.0.0.0:8765`，数据写入 `/data/memory.sqlite3`。如果服务不只暴露给本机，建议开启 Basic Auth。
+
+```bash
+curl -u user:change-me http://SERVER_IP:8765/health
+```
+
 ## 配置
 
 复制示例配置：
@@ -370,6 +406,8 @@ CLI arguments > environment variables > config/pam-os.toml > built-in defaults
 ```bash
 export PAM_OS_DB="$HOME/.pam-os/memory.sqlite3"
 export PAM_OS_CONFIG="/path/to/pam-os.toml"
+export PAM_OS_HOST="0.0.0.0"
+export PAM_OS_PORT="8765"
 export PAM_OS_AUTH_ENABLED="true"
 export PAM_OS_AUTH_USERNAME="user"
 export PAM_OS_AUTH_PASSWORD="change-me"

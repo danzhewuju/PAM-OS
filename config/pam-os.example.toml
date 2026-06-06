@@ -9,6 +9,9 @@ db_path = "~/.pam-os/memory.sqlite3"
 
 [server]
 # REST API bind address and port used by `memory serve`.
+# Environment overrides:
+# - PAM_OS_HOST
+# - PAM_OS_PORT
 host = "127.0.0.1"
 port = 8765
 

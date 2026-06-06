@@ -93,6 +93,13 @@ Options:
   --repo-dir DIR      Use an existing PAM-OS repo for MCP/dev mode. Default: $DefaultRepoDir.
   --repo-url URL      Git repository used to refresh the managed repo. Default: $DefaultRepoUrl.
   --ref REF           Git ref used to refresh the managed repo. Default: master.
+  --mode cli|rest     Set skill fallback runtime mode. Default: prompt, then cli.
+  --runtime cli|rest  Alias for --mode.
+  --rest-url URL      PAM-OS REST server URL. Default: http://127.0.0.1:8765.
+  --rest-username USER
+                      REST Basic Auth username. Default: empty.
+  --rest-password PASS
+                      REST Basic Auth password. Default: empty.
   --no-refresh        Do not fetch or clone the managed repo before installing.
   --db PATH           PAM-OS SQLite database path. Default: $DefaultDbPath.
   --python VERSION    Python version for uv run --python. Default: 3.12.
@@ -146,6 +153,50 @@ function Confirm-Action {
             "^(n|no)$" { return $false }
             default { Write-Host "Please answer y or n." }
         }
+    }
+}
+
+function Prompt-Value {
+    param(
+        [string]$Prompt,
+        [string]$Default
+    )
+    if ($script:AssumeYes) {
+        return $Default
+    }
+
+    $promptText = if ([string]::IsNullOrWhiteSpace($Default)) {
+        "$Prompt (leave empty for none)"
+    } else {
+        "$Prompt [$Default]"
+    }
+    $reply = Read-User $promptText
+    if ([string]::IsNullOrWhiteSpace($reply)) {
+        return $Default
+    }
+    return $reply
+}
+
+function Prompt-Secret {
+    param(
+        [string]$Prompt,
+        [string]$Default
+    )
+    if ($script:AssumeYes) {
+        return $Default
+    }
+
+    $secure = Read-Host "$Prompt (leave empty for none)" -AsSecureString
+    if ($secure.Length -eq 0) {
+        return $Default
+    }
+
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try {
+        return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    }
+    finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
     }
 }
 
@@ -533,15 +584,18 @@ function Write-McpJson {
 function Write-SkillConfig {
     param([string]$Path)
 
+    $escapedUrl = ConvertTo-TomlString $script:RestUrl
+    $escapedUser = ConvertTo-TomlString $script:RestUsername
+    $escapedPass = ConvertTo-TomlString $script:RestPassword
     $escapedPython = ConvertTo-TomlString $script:PythonVersion
     $escapedRepoDir = ConvertTo-TomlString $script:RepoDir
     $escapedDbPath = ConvertTo-TomlString $script:DbPath
 
     $content = @"
 # PAM-OS skill runtime mode.
-# Default is CLI. The Codex plugin also registers MCP tools separately.
+# Default is CLI. Change mode to "rest" when the REST server is running.
 
-mode = "cli"
+mode = "$($script:InstallMode)"
 
 [cli]
 python = "$escapedPython"
@@ -550,9 +604,9 @@ repo_dir = "$escapedRepoDir"
 db_path = "$escapedDbPath"
 
 [rest]
-url = "http://127.0.0.1:8765"
-username = ""
-password = ""
+url = "$escapedUrl"
+username = "$escapedUser"
+password = "$escapedPass"
 "@
     Set-Content -LiteralPath $Path -Value $content -Encoding UTF8
 }
@@ -881,7 +935,7 @@ function Write-HermesMcpConfig {
 }
 
 function Invoke-CliInit {
-    if (-not $script:RunInit) {
+    if ($script:InstallMode -ne "cli" -or -not $script:RunInit) {
         return
     }
     if (-not (Confirm-Action "Initialize PAM-OS memory database and warm up the selected runtime?" "y")) {
@@ -942,6 +996,10 @@ MCP command:
 Runtime:
   $($script:RuntimeLabel)
 
+Skill fallback runtime:
+  mode: $($script:InstallMode)
+  REST URL: $($script:RestUrl)
+
 MCP environment:
   $mcpEnvJson
 
@@ -967,6 +1025,11 @@ try {
     $script:RepoDir = $DefaultRepoDir
     $script:RepoDirExplicit = $false
     $script:RefreshRepo = $true
+    $script:ModeArg = ""
+    $script:InstallMode = ""
+    $script:RestUrl = Get-EnvOrDefault "PAM_OS_REST_URL" "http://127.0.0.1:8765"
+    $script:RestUsername = Get-EnvOrDefault "PAM_OS_REST_USERNAME" ""
+    $script:RestPassword = Get-EnvOrDefault "PAM_OS_REST_PASSWORD" ""
     $script:DbPath = $DefaultDbPath
     $script:PythonVersion = Get-EnvOrDefault "PAM_OS_CLI_PYTHON" "3.12"
     $script:UvBin = Get-EnvOrDefault "PAM_OS_UV_BIN" ""
@@ -1044,6 +1107,30 @@ try {
                 $i++
                 $script:RepoRef = Get-OptionValue $arg $i
             }
+            "--mode" {
+                $i++
+                $script:ModeArg = Get-OptionValue $arg $i
+            }
+            "--runtime" {
+                $i++
+                $script:ModeArg = Get-OptionValue $arg $i
+            }
+            "--rest-url" {
+                $i++
+                $script:RestUrl = Get-OptionValue $arg $i
+            }
+            "--rest-username" {
+                $i++
+                $script:RestUsername = Get-OptionValue $arg $i
+            }
+            "--rest-user" {
+                $i++
+                $script:RestUsername = Get-OptionValue $arg $i
+            }
+            "--rest-password" {
+                $i++
+                $script:RestPassword = Get-OptionValue $arg $i
+            }
             "--no-refresh" { $script:RefreshRepo = $false }
             "--db" {
                 $i++
@@ -1101,6 +1188,10 @@ try {
         }
     }
 
+    if (-not [string]::IsNullOrWhiteSpace($script:ModeArg) -and $script:ModeArg -notin @("cli", "rest")) {
+        Stop-Install "--mode must be cli or rest."
+    }
+
     if (-not $script:AssumeYes -and -not (Test-CanPrompt)) {
         Stop-Install "Interactive install requires a user session. Use --yes with explicit options for non-interactive installs."
     }
@@ -1117,6 +1208,41 @@ try {
     }
     if (-not ($script:InstallCodex -or $script:InstallClaude -or $script:InstallOpenCode -or $script:InstallHermes)) {
         Stop-Install "No install targets selected."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($script:ModeArg)) {
+        if ($script:AssumeYes) {
+            $script:InstallMode = "cli"
+        }
+        else {
+            Write-Host ""
+            Write-Host "Runtime mode:"
+            Write-Host "  1) cli  - no long-running server; model runs the local memory CLI"
+            Write-Host "  2) rest - model calls a running PAM-OS REST server"
+            $modeChoice = Read-User "Selection [1]"
+            if ([string]::IsNullOrWhiteSpace($modeChoice)) {
+                $modeChoice = "1"
+            }
+            switch ($modeChoice) {
+                "1" { $script:InstallMode = "cli" }
+                "cli" { $script:InstallMode = "cli" }
+                "2" { $script:InstallMode = "rest" }
+                "rest" { $script:InstallMode = "rest" }
+                default { Stop-Install "Invalid runtime mode: $modeChoice" }
+            }
+        }
+    }
+    else {
+        $script:InstallMode = $script:ModeArg
+    }
+
+    if ($script:InstallMode -eq "rest") {
+        $script:RestUrl = Prompt-Value "PAM-OS REST URL" $script:RestUrl
+        $script:RestUsername = Prompt-Value "REST username" $script:RestUsername
+        $script:RestPassword = Prompt-Secret "REST password" $script:RestPassword
+    }
+    if ([string]::IsNullOrWhiteSpace($script:RestUrl)) {
+        Stop-Install "--rest-url must not be empty when --mode rest is selected."
     }
 
     $script:DbPath = Resolve-AbsolutePath $script:DbPath
