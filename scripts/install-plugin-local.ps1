@@ -8,6 +8,12 @@ $RepoRoot = [IO.Path]::GetFullPath((Join-Path $ScriptDir ".."))
 $Installer = Join-Path $RepoRoot "scripts\install-plugin.ps1"
 $PluginName = if ([string]::IsNullOrWhiteSpace($env:PAM_OS_PLUGIN_NAME)) { "pam-os-memory" } else { $env:PAM_OS_PLUGIN_NAME }
 $SourceDir = Join-Path (Join-Path $RepoRoot "plugins") $PluginName
+$HomeDir = $HOME
+$CodexHome = if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) { Join-Path $HomeDir ".codex" } else { $env:CODEX_HOME }
+$HermesHome = if ([string]::IsNullOrWhiteSpace($env:HERMES_HOME)) { Join-Path $HomeDir ".hermes" } else { $env:HERMES_HOME }
+$CodexSkillDir = Join-Path (Join-Path $CodexHome "skills") $PluginName
+$ClaudeSkillDir = Join-Path (Join-Path (Join-Path $HomeDir ".claude") "skills") $PluginName
+$HermesSkillDir = Join-Path (Join-Path $HermesHome "skills") $PluginName
 
 $AssumeYes = $true
 $HasTarget = $false
@@ -20,6 +26,9 @@ $SelectedMode = ""
 $RestUrl = if ([string]::IsNullOrWhiteSpace($env:PAM_OS_REST_URL)) { "http://127.0.0.1:8765" } else { $env:PAM_OS_REST_URL }
 $RestUsername = if ([string]::IsNullOrWhiteSpace($env:PAM_OS_REST_USERNAME)) { "" } else { $env:PAM_OS_REST_USERNAME }
 $RestPassword = if ([string]::IsNullOrWhiteSpace($env:PAM_OS_REST_PASSWORD)) { "" } else { $env:PAM_OS_REST_PASSWORD }
+$RestUrlExplicit = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("PAM_OS_REST_URL"))
+$RestUsernameExplicit = $null -ne [Environment]::GetEnvironmentVariable("PAM_OS_REST_USERNAME")
+$RestPasswordExplicit = $null -ne [Environment]::GetEnvironmentVariable("PAM_OS_REST_PASSWORD")
 
 function Stop-LocalInstall {
     param([string]$Message)
@@ -78,6 +87,217 @@ function Prompt-Secret {
     finally {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
     }
+}
+
+function ConvertFrom-TomlBasicString {
+    param([string]$Value)
+
+    if ($null -eq $Value) {
+        return ""
+    }
+
+    $builder = New-Object System.Text.StringBuilder
+    $escaped = $false
+    foreach ($ch in $Value.ToCharArray()) {
+        if ($escaped) {
+            switch ([string]$ch) {
+                '"' { [void]$builder.Append('"') }
+                "\" { [void]$builder.Append("\") }
+                "n" { [void]$builder.Append("`n") }
+                "r" { [void]$builder.Append("`r") }
+                "t" { [void]$builder.Append("`t") }
+                default { [void]$builder.Append($ch) }
+            }
+            $escaped = $false
+            continue
+        }
+
+        if ([string]$ch -eq "\") {
+            $escaped = $true
+            continue
+        }
+        [void]$builder.Append($ch)
+    }
+
+    if ($escaped) {
+        [void]$builder.Append("\")
+    }
+    return $builder.ToString()
+}
+
+function Get-TomlStringValue {
+    param(
+        [string]$Text,
+        [string]$Key,
+        [string]$Section = ""
+    )
+
+    $scope = $Text
+    if (-not [string]::IsNullOrWhiteSpace($Section)) {
+        $sectionPattern = "(?ms)^\s*\[$([regex]::Escape($Section))\]\s*(.*?)(?=^\s*\[|\z)"
+        $sectionMatch = [regex]::Match($Text, $sectionPattern)
+        if (-not $sectionMatch.Success) {
+            return ""
+        }
+        $scope = $sectionMatch.Groups[1].Value
+    }
+
+    $keyPattern = '(?m)^\s*' + [regex]::Escape($Key) + '\s*=\s*"((?:\\.|[^"])*)"\s*$'
+    $match = [regex]::Match($scope, $keyPattern)
+    if (-not $match.Success) {
+        return ""
+    }
+    return ConvertFrom-TomlBasicString $match.Groups[1].Value
+}
+
+function Add-RestConfigPath {
+    param(
+        [System.Collections.Generic.List[string]]$Paths,
+        [System.Collections.Generic.HashSet[string]]$Seen,
+        [string]$Path
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+
+    $key = $Path.ToLowerInvariant()
+    if ($Seen.Add($key)) {
+        $Paths.Add($Path)
+    }
+}
+
+function Get-RestConfigSearchPaths {
+    $paths = New-Object System.Collections.Generic.List[string]
+    $seen = New-Object System.Collections.Generic.HashSet[string]
+
+    if ($SelectedTargets.Count -gt 0) {
+        foreach ($target in $SelectedTargets) {
+            switch ($target) {
+                "codex" { Add-RestConfigPath $paths $seen (Join-Path $CodexSkillDir "config.toml") }
+                "claude" { Add-RestConfigPath $paths $seen (Join-Path $ClaudeSkillDir "config.toml") }
+                "opencode" { Add-RestConfigPath $paths $seen (Join-Path $ClaudeSkillDir "config.toml") }
+                "hermes" { Add-RestConfigPath $paths $seen (Join-Path $HermesSkillDir "config.toml") }
+                "all" {
+                    Add-RestConfigPath $paths $seen (Join-Path $CodexSkillDir "config.toml")
+                    Add-RestConfigPath $paths $seen (Join-Path $ClaudeSkillDir "config.toml")
+                    Add-RestConfigPath $paths $seen (Join-Path $HermesSkillDir "config.toml")
+                }
+            }
+        }
+    }
+
+    Add-RestConfigPath $paths $seen (Join-Path $CodexSkillDir "config.toml")
+    Add-RestConfigPath $paths $seen (Join-Path $ClaudeSkillDir "config.toml")
+    Add-RestConfigPath $paths $seen (Join-Path $HermesSkillDir "config.toml")
+    return @($paths)
+}
+
+function Find-ExistingRestConfig {
+    foreach ($rawPath in (Get-RestConfigSearchPaths)) {
+        $path = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($rawPath))
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            continue
+        }
+
+        try {
+            $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+            $mode = Get-TomlStringValue $text "mode"
+            if ($mode.Trim().ToLowerInvariant() -ne "rest") {
+                continue
+            }
+
+            $url = Get-TomlStringValue $text "url" "rest"
+            if ([string]::IsNullOrWhiteSpace($url)) {
+                continue
+            }
+
+            return [pscustomobject]@{
+                Path = $path
+                Mode = $mode
+                Url = $url
+                Username = Get-TomlStringValue $text "username" "rest"
+                Password = Get-TomlStringValue $text "password" "rest"
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    return $null
+}
+
+function Show-RestConfigSummary {
+    param(
+        [string]$Path,
+        [string]$Mode,
+        [string]$Url,
+        [string]$Username,
+        [string]$Password
+    )
+
+    $passwordLabel = if ([string]::IsNullOrEmpty($Password)) { "empty" } else { "set" }
+    Write-Host ""
+    Write-Host "REST configuration found:"
+    Write-Host "  path: $Path"
+    if (-not [string]::IsNullOrWhiteSpace($Mode)) {
+        Write-Host "  mode: $Mode"
+    }
+    Write-Host "  url: $Url"
+    Write-Host "  username: $(if ([string]::IsNullOrEmpty($Username)) { '<empty>' } else { $Username })"
+    Write-Host "  password: $passwordLabel"
+}
+
+function Confirm-User {
+    param(
+        [string]$Prompt,
+        [string]$Default = "y"
+    )
+
+    $suffix = if ($Default -eq "y") { "[Y/n]" } else { "[y/N]" }
+    while ($true) {
+        $reply = Read-User "$Prompt $suffix"
+        if ([string]::IsNullOrWhiteSpace($reply)) {
+            $reply = $Default
+        }
+        switch -Regex ($reply) {
+            "^(y|yes)$" { return $true }
+            "^(n|no)$" { return $false }
+            default { Write-Host "Please answer y or n." }
+        }
+    }
+}
+
+function Configure-RestRuntime {
+    $explicitCount = 0
+    if ($RestUrlExplicit) { $explicitCount++ }
+    if ($RestUsernameExplicit) { $explicitCount++ }
+    if ($RestPasswordExplicit) { $explicitCount++ }
+
+    if ($explicitCount -eq 0) {
+        $existing = Find-ExistingRestConfig
+        if ($null -ne $existing) {
+            Show-RestConfigSummary $existing.Path $existing.Mode $existing.Url $existing.Username $existing.Password
+            if (Confirm-User "Use this existing REST configuration?" "y") {
+                $script:RestUrl = $existing.Url
+                $script:RestUsername = $existing.Username
+                $script:RestPassword = $existing.Password
+                return
+            }
+        }
+    }
+
+    if ($explicitCount -gt 0) {
+        Show-RestConfigSummary "options/environment" "" $RestUrl $RestUsername $RestPassword
+        if (Confirm-User "Use this REST configuration?" "y") {
+            return
+        }
+    }
+
+    $script:RestUrl = Prompt-Value "PAM-OS REST URL" $RestUrl
+    $script:RestUsername = Prompt-Value "REST username" $RestUsername
+    $script:RestPassword = Prompt-Secret "REST password" $RestPassword
 }
 
 function Select-InstallTargets {
@@ -161,9 +381,7 @@ function Select-RuntimeMode {
             }
             "2" {
                 $script:SelectedMode = "rest"
-                $script:RestUrl = Prompt-Value "PAM-OS REST URL" $script:RestUrl
-                $script:RestUsername = Prompt-Value "REST username" $script:RestUsername
-                $script:RestPassword = Prompt-Secret "REST password" $script:RestPassword
+                Configure-RestRuntime
                 if ([string]::IsNullOrWhiteSpace($script:RestUrl)) {
                     Stop-LocalInstall "REST URL must not be empty."
                 }
@@ -171,9 +389,7 @@ function Select-RuntimeMode {
             }
             "rest" {
                 $script:SelectedMode = "rest"
-                $script:RestUrl = Prompt-Value "PAM-OS REST URL" $script:RestUrl
-                $script:RestUsername = Prompt-Value "REST username" $script:RestUsername
-                $script:RestPassword = Prompt-Secret "REST password" $script:RestPassword
+                Configure-RestRuntime
                 if ([string]::IsNullOrWhiteSpace($script:RestUrl)) {
                     Stop-LocalInstall "REST URL must not be empty."
                 }
@@ -213,6 +429,7 @@ Examples:
   .\scripts\install-plugin-local.ps1 --no-init
 
 Options handled by this wrapper:
+  In interactive REST mode, existing installed skill REST settings are offered for reuse.
   --interactive      Do not pass --yes; allow the installer to prompt.
   --yes              Fully non-interactive legacy default: install codex with CLI mode.
   --non-interactive  Alias for --yes.
@@ -279,6 +496,8 @@ for ($i = 0; $i -lt $CliArgs.Count; $i++) {
             if ($i + 1 -ge $CliArgs.Count -or [string]::IsNullOrWhiteSpace($CliArgs[$i + 1]) -or $CliArgs[$i + 1].StartsWith("-")) {
                 Stop-LocalInstall "--rest-url requires a value"
             }
+            $RestUrlExplicit = $true
+            $RestUrl = $CliArgs[$i + 1]
             $Passthrough += $arg
             $i++
             $Passthrough += $CliArgs[$i]
@@ -287,6 +506,8 @@ for ($i = 0; $i -lt $CliArgs.Count; $i++) {
             if ($i + 1 -ge $CliArgs.Count -or $CliArgs[$i + 1].StartsWith("-")) {
                 Stop-LocalInstall "--rest-username requires a value"
             }
+            $RestUsernameExplicit = $true
+            $RestUsername = $CliArgs[$i + 1]
             $Passthrough += $arg
             $i++
             $Passthrough += $CliArgs[$i]
@@ -295,6 +516,8 @@ for ($i = 0; $i -lt $CliArgs.Count; $i++) {
             if ($i + 1 -ge $CliArgs.Count -or $CliArgs[$i + 1].StartsWith("-")) {
                 Stop-LocalInstall "--rest-user requires a value"
             }
+            $RestUsernameExplicit = $true
+            $RestUsername = $CliArgs[$i + 1]
             $Passthrough += $arg
             $i++
             $Passthrough += $CliArgs[$i]
@@ -303,6 +526,35 @@ for ($i = 0; $i -lt $CliArgs.Count; $i++) {
             if ($i + 1 -ge $CliArgs.Count -or $CliArgs[$i + 1].StartsWith("-")) {
                 Stop-LocalInstall "--rest-password requires a value"
             }
+            $RestPasswordExplicit = $true
+            $RestPassword = $CliArgs[$i + 1]
+            $Passthrough += $arg
+            $i++
+            $Passthrough += $CliArgs[$i]
+        }
+        "--codex-skill-dir" {
+            if ($i + 1 -ge $CliArgs.Count -or [string]::IsNullOrWhiteSpace($CliArgs[$i + 1]) -or $CliArgs[$i + 1].StartsWith("-")) {
+                Stop-LocalInstall "--codex-skill-dir requires a value"
+            }
+            $CodexSkillDir = $CliArgs[$i + 1]
+            $Passthrough += $arg
+            $i++
+            $Passthrough += $CliArgs[$i]
+        }
+        "--claude-skill-dir" {
+            if ($i + 1 -ge $CliArgs.Count -or [string]::IsNullOrWhiteSpace($CliArgs[$i + 1]) -or $CliArgs[$i + 1].StartsWith("-")) {
+                Stop-LocalInstall "--claude-skill-dir requires a value"
+            }
+            $ClaudeSkillDir = $CliArgs[$i + 1]
+            $Passthrough += $arg
+            $i++
+            $Passthrough += $CliArgs[$i]
+        }
+        "--hermes-skill-dir" {
+            if ($i + 1 -ge $CliArgs.Count -or [string]::IsNullOrWhiteSpace($CliArgs[$i + 1]) -or $CliArgs[$i + 1].StartsWith("-")) {
+                Stop-LocalInstall "--hermes-skill-dir requires a value"
+            }
+            $HermesSkillDir = $CliArgs[$i + 1]
             $Passthrough += $arg
             $i++
             $Passthrough += $CliArgs[$i]

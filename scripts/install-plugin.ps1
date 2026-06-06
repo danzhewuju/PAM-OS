@@ -39,6 +39,7 @@ $DefaultMarketplacePath = Join-PathMany @($HomeDir, ".agents", "plugins", "marke
 $DefaultCodexConfig = Join-Path $CodexHome "config.toml"
 $DefaultCodexSkillDir = Join-PathMany @($CodexHome, "skills", $PluginName)
 $DefaultClaudeSkillDir = Join-PathMany @($HomeDir, ".claude", "skills", $PluginName)
+$DefaultClaudeMcpScope = Get-EnvOrDefault "PAM_OS_CLAUDE_MCP_SCOPE" "user"
 $DefaultOpenCodeAgentsFile = Join-PathMany @($AppDataDir, "opencode", "AGENTS.md")
 $HermesHome = Get-EnvOrDefault "HERMES_HOME" (Join-Path $HomeDir ".hermes")
 $DefaultHermesConfig = Join-Path $HermesHome "config.yaml"
@@ -74,7 +75,7 @@ Usage:
 Options:
   --target TARGET      Install target: codex, claude, opencode, hermes, or all. Can be repeated.
   --codex             Install the Codex plugin, global skill fallback, and MCP config.
-  --claude            Install the Claude Code global skill.
+  --claude            Install the Claude Code global skill and MCP config.
   --opencode          Install OpenCode compatibility guidance and Claude-compatible skill.
   --hermes            Install Hermes skill, MCP config, and guidance.
   --all               Install all supported targets.
@@ -85,6 +86,8 @@ Options:
                       Codex global skill fallback dir. Default: $DefaultCodexSkillDir.
   --claude-skill-dir DIR
                       Claude Code skill dir. Default: $DefaultClaudeSkillDir.
+  --claude-mcp-scope SCOPE
+                      Claude Code MCP scope. Default: $DefaultClaudeMcpScope.
   --opencode-agents PATH
                       OpenCode AGENTS.md path. Default: $DefaultOpenCodeAgentsFile.
   --hermes-config PATH
@@ -103,6 +106,7 @@ Options:
                       REST Basic Auth username. Default: empty.
   --rest-password PASS
                       REST Basic Auth password. Default: empty.
+                      In interactive REST mode, existing installed skill REST settings are offered for reuse.
   --no-refresh        Do not fetch or clone the managed repo before installing.
   --db PATH           PAM-OS SQLite database path. Default: $DefaultDbPath.
   --python VERSION    Python version for uv run --python. Default: 3.12.
@@ -123,6 +127,10 @@ The Codex target installs the plugin, writes a marketplace entry, and installs
 the global skill fallback. CLI mode registers a stdio MCP server in Codex
 config.toml; REST mode removes managed PAM-OS MCP registrations so the skill
 uses the configured REST API.
+
+The Claude target installs the global skill and, in CLI mode unless
+--skip-mcp-config is passed, registers the same stdio MCP server with:
+  claude mcp add-json --scope <scope> pam_os_memory '<json>'
 "@
 }
 
@@ -205,13 +213,198 @@ function Prompt-Secret {
     }
 }
 
+function ConvertFrom-TomlBasicString {
+    param([string]$Value)
+
+    if ($null -eq $Value) {
+        return ""
+    }
+
+    $builder = New-Object System.Text.StringBuilder
+    $escaped = $false
+    foreach ($ch in $Value.ToCharArray()) {
+        if ($escaped) {
+            switch ([string]$ch) {
+                '"' { [void]$builder.Append('"') }
+                "\" { [void]$builder.Append("\") }
+                "n" { [void]$builder.Append("`n") }
+                "r" { [void]$builder.Append("`r") }
+                "t" { [void]$builder.Append("`t") }
+                default { [void]$builder.Append($ch) }
+            }
+            $escaped = $false
+            continue
+        }
+
+        if ([string]$ch -eq "\") {
+            $escaped = $true
+            continue
+        }
+        [void]$builder.Append($ch)
+    }
+
+    if ($escaped) {
+        [void]$builder.Append("\")
+    }
+    return $builder.ToString()
+}
+
+function Get-TomlStringValue {
+    param(
+        [string]$Text,
+        [string]$Key,
+        [string]$Section = ""
+    )
+
+    $scope = $Text
+    if (-not [string]::IsNullOrWhiteSpace($Section)) {
+        $sectionPattern = "(?ms)^\s*\[$([regex]::Escape($Section))\]\s*(.*?)(?=^\s*\[|\z)"
+        $sectionMatch = [regex]::Match($Text, $sectionPattern)
+        if (-not $sectionMatch.Success) {
+            return ""
+        }
+        $scope = $sectionMatch.Groups[1].Value
+    }
+
+    $keyPattern = '(?m)^\s*' + [regex]::Escape($Key) + '\s*=\s*"((?:\\.|[^"])*)"\s*$'
+    $match = [regex]::Match($scope, $keyPattern)
+    if (-not $match.Success) {
+        return ""
+    }
+    return ConvertFrom-TomlBasicString $match.Groups[1].Value
+}
+
+function Add-RestConfigPath {
+    param(
+        [System.Collections.Generic.List[string]]$Paths,
+        [System.Collections.Generic.HashSet[string]]$Seen,
+        [string]$Path
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+
+    $key = $Path.ToLowerInvariant()
+    if ($Seen.Add($key)) {
+        $Paths.Add($Path)
+    }
+}
+
+function Get-RestConfigSearchPaths {
+    $paths = New-Object System.Collections.Generic.List[string]
+    $seen = New-Object System.Collections.Generic.HashSet[string]
+
+    if ($script:InstallCodex) {
+        Add-RestConfigPath $paths $seen (Join-Path $script:CodexSkillDir "config.toml")
+    }
+    if ($script:InstallClaude -or $script:InstallOpenCode) {
+        Add-RestConfigPath $paths $seen (Join-Path $script:ClaudeSkillDir "config.toml")
+    }
+    if ($script:InstallHermes) {
+        Add-RestConfigPath $paths $seen (Join-Path $script:HermesSkillDir "config.toml")
+    }
+
+    Add-RestConfigPath $paths $seen (Join-Path $script:CodexSkillDir "config.toml")
+    Add-RestConfigPath $paths $seen (Join-Path $script:ClaudeSkillDir "config.toml")
+    Add-RestConfigPath $paths $seen (Join-Path $script:HermesSkillDir "config.toml")
+    return @($paths)
+}
+
+function Find-ExistingRestConfig {
+    foreach ($rawPath in (Get-RestConfigSearchPaths)) {
+        $path = Resolve-AbsolutePath $rawPath
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            continue
+        }
+
+        try {
+            $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+            $mode = Get-TomlStringValue $text "mode"
+            if ($mode.Trim().ToLowerInvariant() -ne "rest") {
+                continue
+            }
+
+            $url = Get-TomlStringValue $text "url" "rest"
+            if ([string]::IsNullOrWhiteSpace($url)) {
+                continue
+            }
+
+            return [pscustomobject]@{
+                Path = $path
+                Mode = $mode
+                Url = $url
+                Username = Get-TomlStringValue $text "username" "rest"
+                Password = Get-TomlStringValue $text "password" "rest"
+            }
+        }
+        catch {
+            continue
+        }
+    }
+
+    return $null
+}
+
+function Show-RestConfigSummary {
+    param(
+        [string]$Path,
+        [string]$Mode,
+        [string]$Url,
+        [string]$Username,
+        [string]$Password
+    )
+
+    $passwordLabel = if ([string]::IsNullOrEmpty($Password)) { "empty" } else { "set" }
+    Write-Host ""
+    Write-Host "REST configuration found:"
+    Write-Host "  path: $Path"
+    if (-not [string]::IsNullOrWhiteSpace($Mode)) {
+        Write-Host "  mode: $Mode"
+    }
+    Write-Host "  url: $Url"
+    Write-Host "  username: $(if ([string]::IsNullOrEmpty($Username)) { '<empty>' } else { $Username })"
+    Write-Host "  password: $passwordLabel"
+}
+
+function Configure-RestRuntime {
+    $explicitCount = 0
+    if ($script:RestUrlExplicit) { $explicitCount++ }
+    if ($script:RestUsernameExplicit) { $explicitCount++ }
+    if ($script:RestPasswordExplicit) { $explicitCount++ }
+
+    if ($explicitCount -eq 0) {
+        $existing = Find-ExistingRestConfig
+        if ($null -ne $existing) {
+            Show-RestConfigSummary $existing.Path $existing.Mode $existing.Url $existing.Username $existing.Password
+            if (Confirm-Action "Use this existing REST configuration?" "y") {
+                $script:RestUrl = $existing.Url
+                $script:RestUsername = $existing.Username
+                $script:RestPassword = $existing.Password
+                return
+            }
+        }
+    }
+
+    if ($explicitCount -gt 0) {
+        Show-RestConfigSummary "options/environment" "" $script:RestUrl $script:RestUsername $script:RestPassword
+        if (Confirm-Action "Use this REST configuration?" "y") {
+            return
+        }
+    }
+
+    $script:RestUrl = Prompt-Value "PAM-OS REST URL" $script:RestUrl
+    $script:RestUsername = Prompt-Value "REST username" $script:RestUsername
+    $script:RestPassword = Prompt-Secret "REST password" $script:RestPassword
+}
+
 function Select-InstallTargets {
     Write-Host ""
     Write-Host "Install targets:"
     Write-Host "  1) codex    - Codex plugin + MCP + global skill fallback"
-    Write-Host "  2) claude   - Claude Code global skill"
+    Write-Host "  2) claude   - Claude Code global skill + MCP"
     Write-Host "  3) opencode - OpenCode compatibility"
-    Write-Host "  4) hermes   - Hermes MCP config and guidance"
+    Write-Host "  4) hermes   - Hermes skill + MCP config and guidance"
     Write-Host "  5) all"
     Write-Host ""
     Write-Host "Select one or more targets, separated by commas or spaces."
@@ -426,6 +619,23 @@ function Find-PythonBin {
     return ""
 }
 
+function Find-ClaudeBin {
+    $envClaude = Get-EnvOrDefault "PAM_OS_CLAUDE_BIN" ""
+    if (-not [string]::IsNullOrWhiteSpace($envClaude)) {
+        $candidate = Resolve-AbsolutePath $envClaude
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return $candidate
+        }
+        return ""
+    }
+
+    $cmd = Get-Command claude -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return $cmd.Source
+    }
+    return ""
+}
+
 function Resolve-RepoDir {
     if ($script:RepoDirExplicit) {
         if (-not (Test-PamRepo $script:RepoDir)) {
@@ -586,6 +796,45 @@ function Write-McpJson {
     $payload | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+function Get-ClaudeMcpJson {
+    $payload = [ordered]@{
+        command = $script:McpCommand
+        args = $script:McpArgs
+        env = $script:McpEnv
+    }
+    return ($payload | ConvertTo-Json -Depth 8 -Compress)
+}
+
+function Write-ClaudeMcpConfig {
+    $claudeBin = Find-ClaudeBin
+    $payload = Get-ClaudeMcpJson
+    if ([string]::IsNullOrWhiteSpace($claudeBin)) {
+        Write-Warn "Could not find claude CLI; skipped Claude MCP registration."
+        Write-Warn "Run manually later: claude mcp add-json --scope $($script:ClaudeMcpScope) $McpServerName '$payload'"
+        return
+    }
+
+    Write-Info "Registering Claude MCP server $McpServerName with scope $($script:ClaudeMcpScope)"
+    & $claudeBin mcp remove --scope $script:ClaudeMcpScope $McpServerName 2>$null | Out-Null
+    & $claudeBin mcp add-json --scope $script:ClaudeMcpScope $McpServerName $payload
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Failed to register Claude MCP server $McpServerName."
+        Write-Warn "Run manually later: claude mcp add-json --scope $($script:ClaudeMcpScope) $McpServerName '$payload'"
+    }
+}
+
+function Remove-ClaudeMcpConfig {
+    $claudeBin = Find-ClaudeBin
+    if ([string]::IsNullOrWhiteSpace($claudeBin)) {
+        Write-Warn "Could not find claude CLI; skipped Claude MCP removal."
+        Write-Warn "Run manually later: claude mcp remove --scope $($script:ClaudeMcpScope) $McpServerName"
+        return
+    }
+
+    Write-Info "Removing Claude MCP server $McpServerName from scope $($script:ClaudeMcpScope) for REST mode"
+    & $claudeBin mcp remove --scope $script:ClaudeMcpScope $McpServerName 2>$null | Out-Null
+}
+
 function Write-SkillConfig {
     param([string]$Path)
 
@@ -649,6 +898,20 @@ function Install-CodexGlobalSkill {
         return
     }
     Install-GlobalSkill $skillSource $Destination "Codex global skill fallback"
+}
+
+function Install-Claude {
+    param([string]$Source)
+
+    Install-GlobalSkill $Source $script:ClaudeSkillDir "Claude Code global skill"
+    if ($script:WriteMcpConfig) {
+        if ($script:InstallMode -eq "cli") {
+            Write-ClaudeMcpConfig
+        }
+        else {
+            Remove-ClaudeMcpConfig
+        }
+    }
 }
 
 function Write-MarketplaceConfig {
@@ -1153,6 +1416,7 @@ try {
     $script:CodexConfig = $DefaultCodexConfig
     $script:CodexSkillDir = $DefaultCodexSkillDir
     $script:ClaudeSkillDir = $DefaultClaudeSkillDir
+    $script:ClaudeMcpScope = $DefaultClaudeMcpScope
     $script:OpenCodeAgentsFile = $DefaultOpenCodeAgentsFile
     $script:HermesConfig = $DefaultHermesConfig
     $script:HermesAgentsFile = $DefaultHermesAgentsFile
@@ -1167,6 +1431,9 @@ try {
     $script:RestUrl = Get-EnvOrDefault "PAM_OS_REST_URL" "http://127.0.0.1:8765"
     $script:RestUsername = Get-EnvOrDefault "PAM_OS_REST_USERNAME" ""
     $script:RestPassword = Get-EnvOrDefault "PAM_OS_REST_PASSWORD" ""
+    $script:RestUrlExplicit = -not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("PAM_OS_REST_URL"))
+    $script:RestUsernameExplicit = $null -ne [Environment]::GetEnvironmentVariable("PAM_OS_REST_USERNAME")
+    $script:RestPasswordExplicit = $null -ne [Environment]::GetEnvironmentVariable("PAM_OS_REST_PASSWORD")
     $script:DbPath = $DefaultDbPath
     $script:PythonVersion = Get-EnvOrDefault "PAM_OS_CLI_PYTHON" "3.12"
     $script:UvBin = Get-EnvOrDefault "PAM_OS_UV_BIN" ""
@@ -1218,6 +1485,10 @@ try {
                 $i++
                 $script:ClaudeSkillDir = Get-OptionValue $arg $i
             }
+            "--claude-mcp-scope" {
+                $i++
+                $script:ClaudeMcpScope = Get-OptionValue $arg $i
+            }
             "--opencode-agents" {
                 $i++
                 $script:OpenCodeAgentsFile = Get-OptionValue $arg $i
@@ -1259,18 +1530,22 @@ try {
             "--rest-url" {
                 $i++
                 $script:RestUrl = Get-OptionValue $arg $i
+                $script:RestUrlExplicit = $true
             }
             "--rest-username" {
                 $i++
                 $script:RestUsername = Get-OptionValue $arg $i
+                $script:RestUsernameExplicit = $true
             }
             "--rest-user" {
                 $i++
                 $script:RestUsername = Get-OptionValue $arg $i
+                $script:RestUsernameExplicit = $true
             }
             "--rest-password" {
                 $i++
                 $script:RestPassword = Get-OptionValue $arg $i
+                $script:RestPasswordExplicit = $true
             }
             "--no-refresh" { $script:RefreshRepo = $false }
             "--db" {
@@ -1315,6 +1590,7 @@ try {
         @("--codex-config", $script:CodexConfig),
         @("--codex-skill-dir", $script:CodexSkillDir),
         @("--claude-skill-dir", $script:ClaudeSkillDir),
+        @("--claude-mcp-scope", $script:ClaudeMcpScope),
         @("--opencode-agents", $script:OpenCodeAgentsFile),
         @("--hermes-config", $script:HermesConfig),
         @("--hermes-agents", $script:HermesAgentsFile),
@@ -1379,9 +1655,7 @@ try {
     }
 
     if ($script:InstallMode -eq "rest") {
-        $script:RestUrl = Prompt-Value "PAM-OS REST URL" $script:RestUrl
-        $script:RestUsername = Prompt-Value "REST username" $script:RestUsername
-        $script:RestPassword = Prompt-Secret "REST password" $script:RestPassword
+        Configure-RestRuntime
     }
     if ([string]::IsNullOrWhiteSpace($script:RestUrl)) {
         Stop-Install "--rest-url must not be empty when --mode rest is selected."
@@ -1456,7 +1730,7 @@ try {
     }
 
     if ($script:InstallClaude) {
-        Install-GlobalSkill $skillSource $script:ClaudeSkillDir "Claude Code global skill"
+        Install-Claude $skillSource
     }
 
     if ($script:InstallOpenCode) {
