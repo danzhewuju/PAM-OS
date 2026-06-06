@@ -37,7 +37,7 @@ Task/Event
 
 ## 2. 快速开始：插件安装
 
-推荐通过插件接入 PAM-OS，这是最主要的使用方式。插件会托管运行仓库、注册 MCP server 和 skill，让 AI 客户端自动获得记忆读写能力。
+推荐通过插件接入 PAM-OS，这是最主要的使用方式。插件会托管运行仓库并安装 skill。CLI 模式会注册本地 MCP server；REST 模式会移除安装器管理的本地 MCP 注册，让 AI 客户端通过 REST 使用记忆。
 
 ### 2.1 一键安装
 
@@ -51,7 +51,7 @@ Task/Event
 - `~/plugins/pam-os-memory`：个人 plugin 源目录。
 - `~/.agents/plugins/marketplace.json`：个人 marketplace 入口。
 - `~/.codex/skills/pam-os-memory`：全局 skill fallback。
-- `~/.codex/config.toml`：`pam_os_memory` MCP server 注册。
+- `~/.codex/config.toml`：CLI 模式下的 `pam_os_memory` MCP server 注册；REST 模式会移除安装器管理的该注册。
 
 ### 2.2 支持的其他客户端
 
@@ -109,7 +109,7 @@ MCP tools = 给模型稳定工具能力：prepare_context、capture_memory、sea
 Skill     = 给模型操作策略：什么时候读记忆、什么时候写记忆、什么不要保存
 ```
 
-Skill 负责"会判断"，MCP 负责"怎么调用"。当前推荐 `Plugin + MCP + Skill`：MCP 是日常优先工具入口，REST 和 CLI 保留为 fallback。
+Skill 负责"会判断"。CLI 模式下 MCP 负责"怎么调用"并作为优先工具入口；REST 模式下安装器不保留本地 MCP 注册，skill 直接调用 REST API。
 
 ### 3.1 可用 MCP 工具
 
@@ -142,7 +142,7 @@ Claude:     ~/.claude/skills/pam-os-memory/config.toml
 CC Switch:  ~/.config/cc-switch/skills/pam-os-memory/config.toml
 ```
 
-默认是 `mode = "cli"`。如果要走 REST，把 `mode` 改成 `rest`，并确保 PAM-OS REST 服务已启动。
+默认是 `mode = "cli"`。如果要后续都走 REST，推荐重新运行安装器并选择 `--mode rest`；它会写入 `mode = "rest"`，并移除安装器管理的本地 MCP 注册。
 
 ### 3.4 建议给模型的系统提示片段
 

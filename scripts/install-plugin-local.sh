@@ -167,8 +167,8 @@ select_runtime_mode() {
   local mode_choice
 
   ui_printf '\nRuntime mode:\n'
-  ui_printf '  1) cli  - no long-running server; model runs the local memory CLI\n'
-  ui_printf '  2) rest - model calls a running PAM-OS REST server\n'
+  ui_printf '  1) cli  - register local MCP runtime; CLI fallback remains available\n'
+  ui_printf '  2) rest - use a running PAM-OS REST server and remove managed local MCP\n'
 
   while true; do
     if ! read_user mode_choice 'Selection [1]: '; then

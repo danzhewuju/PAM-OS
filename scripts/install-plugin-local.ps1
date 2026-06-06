@@ -141,8 +141,8 @@ function Select-InstallTargets {
 function Select-RuntimeMode {
     Write-Host ""
     Write-Host "Runtime mode:"
-    Write-Host "  1) cli  - no long-running server; model runs the local memory CLI"
-    Write-Host "  2) rest - model calls a running PAM-OS REST server"
+    Write-Host "  1) cli  - register local MCP runtime; CLI fallback remains available"
+    Write-Host "  2) rest - use a running PAM-OS REST server and remove managed local MCP"
 
     while ($true) {
         $modeChoice = Read-User "Selection [1]"

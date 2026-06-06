@@ -69,7 +69,7 @@ Options:
   --repo-dir DIR        Use an existing PAM-OS repo for MCP/dev mode. Default: managed repo ~/.local/share/pam-os/repo.
   --repo-url URL        Git repository used to refresh the managed repo. Default: https://github.com/danzhewuju/PAM-OS.git.
   --ref REF             Git ref used to refresh the managed repo. Default: master.
-  --mode cli|rest       Set skill fallback runtime mode. Default: prompt, then cli.
+  --mode cli|rest       Set runtime mode. CLI registers local MCP; REST uses HTTP skill fallback.
   --runtime cli|rest    Alias for --mode.
   --rest-url URL        PAM-OS REST server URL. Default: http://127.0.0.1:8765.
   --rest-username USER  REST Basic Auth username. Default: empty.
@@ -91,13 +91,15 @@ Without a target option, the installer prompts for one or more targets. With
 --yes and no target option, it installs Codex only.
 
 The Codex target refreshes a managed PAM-OS repo, copies the plugin from that
-repo, writes a marketplace entry for Codex plugin discovery, and unless
---skip-mcp-config is passed, registers a stdio MCP server that runs:
+repo, writes a marketplace entry for Codex plugin discovery, and in CLI mode,
+unless --skip-mcp-config is passed, registers a stdio MCP server that runs:
   <uv-bin> --directory <managed-repo-dir> run --python <version> memory --db <db> mcp
 If uv is unavailable, the installer falls back to:
   PYTHONPATH=<managed-repo-dir>/src <python> -m pam_os.mcp --db <db>
+In REST mode, the installer removes PAM-OS MCP registrations it manages so the
+installed skill uses the configured REST API instead.
 
-The Claude target installs the global skill and, unless --skip-mcp-config is
+The Claude target installs the global skill and, in CLI mode unless --skip-mcp-config is
 passed, registers the same stdio MCP server with:
   claude mcp add-json --scope <scope> pam_os_memory '<json>'
 
@@ -641,6 +643,20 @@ write_claude_mcp_config() {
   warn "Run manually later: claude mcp add-json --scope $CLAUDE_MCP_SCOPE $MCP_SERVER_NAME '$payload'"
 }
 
+remove_claude_mcp_config() {
+  local claude_bin
+
+  claude_bin="$(find_claude_bin || true)"
+  if [[ -z "$claude_bin" ]]; then
+    warn "Could not find claude CLI; skipped Claude MCP removal."
+    warn "Run manually later: claude mcp remove --scope $CLAUDE_MCP_SCOPE $MCP_SERVER_NAME"
+    return 0
+  fi
+
+  info "Removing Claude MCP server '$MCP_SERVER_NAME' from scope '$CLAUDE_MCP_SCOPE' for REST mode"
+  "$claude_bin" mcp remove --scope "$CLAUDE_MCP_SCOPE" "$MCP_SERVER_NAME" >/dev/null 2>&1 || true
+}
+
 
 write_skill_config() {
   local path="$1"
@@ -786,7 +802,11 @@ append_managed_guidance() {
     printf '%s\n' "$start"
     printf '## PAM-OS Memory\n\n'
     printf 'Use PAM-OS as local long-term memory when a task depends on user preferences, project history, prior decisions, long-term goals, answer style, or an explicit request to remember something.\n\n'
-    printf 'Prefer the PAM-OS MCP server when available. If a compatible skill is available, use it; otherwise read the installed skill instructions from `%s`.\n\n' "$skill_path"
+    if [[ "$INSTALL_MODE" == "rest" ]]; then
+      printf 'Use the installed PAM-OS skill and its REST configuration from `%s`. Do not prefer a local MCP server unless the user explicitly re-enables MCP.\n\n' "$skill_path"
+    else
+      printf 'Prefer the PAM-OS MCP server when available. If a compatible skill is available, use it; otherwise read the installed skill instructions from `%s`.\n\n' "$skill_path"
+    fi
     printf 'Do not store secrets or sensitive details unless the user explicitly asks to remember them.\n'
     printf '%s\n' "$end"
   } >> "$tmp"
@@ -799,7 +819,11 @@ install_claude() {
   install_global_skill "$src" "$CLAUDE_SKILL_DIR" "Claude Code global skill"
 
   if [[ "$WRITE_MCP_CONFIG" == "1" ]]; then
-    write_claude_mcp_config
+    if [[ "$INSTALL_MODE" == "cli" ]]; then
+      write_claude_mcp_config
+    else
+      remove_claude_mcp_config
+    fi
   fi
 }
 
@@ -894,13 +918,61 @@ config_path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
 YAML_WRITER
 }
 
+remove_hermes_mcp_config() {
+  local path="$1"
+  $PYTHON_BIN - "$path" "$MCP_SERVER_NAME" <<'YAML_REMOVER'
+import sys
+from pathlib import Path
+
+path, server_name = sys.argv[1:]
+config_path = Path(path).expanduser()
+if not config_path.exists():
+    raise SystemExit(0)
+
+lines = config_path.read_text(encoding="utf-8").splitlines()
+output = []
+index = 0
+in_mcp = False
+removed = False
+while index < len(lines):
+    line = lines[index]
+    stripped = line.strip()
+    if line == "mcp_servers:":
+        in_mcp = True
+        output.append(line)
+        index += 1
+        continue
+    if in_mcp and line.startswith("  ") and stripped == f"{server_name}:":
+        removed = True
+        index += 1
+        while index < len(lines):
+            next_line = lines[index]
+            if next_line and not next_line.startswith("    ") and not next_line.startswith("      "):
+                break
+            index += 1
+        continue
+    if in_mcp and line and not line.startswith(" "):
+        in_mcp = False
+    output.append(line)
+    index += 1
+
+if removed:
+    config_path.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+YAML_REMOVER
+}
+
 install_hermes() {
   local skill_src="$1"
 
   info "Installing Hermes compatibility"
   if [[ "$WRITE_MCP_CONFIG" == "1" ]]; then
-    write_hermes_mcp_config "$HERMES_CONFIG"
-    printf 'Updated: %s\n' "$HERMES_CONFIG"
+    if [[ "$INSTALL_MODE" == "cli" ]]; then
+      write_hermes_mcp_config "$HERMES_CONFIG"
+      printf 'Updated: %s\n' "$HERMES_CONFIG"
+    else
+      remove_hermes_mcp_config "$HERMES_CONFIG"
+      printf 'Removed PAM-OS MCP server from: %s\n' "$HERMES_CONFIG"
+    fi
   fi
   append_managed_guidance "$HERMES_AGENTS_FILE" "$skill_src/SKILL.md"
   printf 'Updated: %s\n' "$HERMES_AGENTS_FILE"
@@ -1041,6 +1113,59 @@ if tomllib is not None:
     tomllib.loads(rendered)
 config_path.write_text(rendered, encoding="utf-8")
 TOML_WRITER
+}
+
+remove_codex_mcp_config() {
+  local path="$1"
+  $PYTHON_BIN - "$path" "$MCP_SERVER_NAME" <<'TOML_REMOVER'
+import sys
+from pathlib import Path
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11
+    tomllib = None
+
+path, server_name = sys.argv[1:]
+config_path = Path(path).expanduser()
+server_header = f"[mcp_servers.{server_name}]"
+server_child_prefix = f"[mcp_servers.{server_name}."
+
+
+def is_table_header(line: str) -> bool:
+    stripped = line.strip()
+    return stripped.startswith("[") and stripped.endswith("]")
+
+
+def is_managed_server_header(line: str) -> bool:
+    stripped = line.strip()
+    return stripped == server_header or stripped.startswith(server_child_prefix)
+
+if not config_path.exists():
+    raise SystemExit(0)
+
+lines = config_path.read_text(encoding="utf-8").splitlines()
+output = []
+index = 0
+removed = False
+while index < len(lines):
+    line = lines[index]
+    if is_managed_server_header(line):
+        removed = True
+        index += 1
+        while index < len(lines):
+            if is_table_header(lines[index]) and not is_managed_server_header(lines[index]):
+                break
+            index += 1
+        continue
+    output.append(line)
+    index += 1
+
+if removed:
+    rendered = "\n".join(output).rstrip() + "\n" if output else ""
+    if tomllib is not None and rendered.strip():
+        tomllib.loads(rendered)
+    config_path.write_text(rendered, encoding="utf-8")
+TOML_REMOVER
 }
 
 ASSUME_YES=0
@@ -1266,8 +1391,8 @@ if [[ -z "$MODE_ARG" ]]; then
     INSTALL_MODE="cli"
   else
     printf '\nRuntime mode:\n'
-    printf '  1) cli  - no long-running server; model runs the local memory CLI\n'
-    printf '  2) rest - model calls a running PAM-OS REST server\n'
+    printf '  1) cli  - register local MCP runtime; CLI fallback remains available\n'
+    printf '  2) rest - use a running PAM-OS REST server and remove managed local MCP\n'
     if ! read_user mode_choice 'Selection [1]: '; then
       if is_pipe_install; then
         pipe_install_hint
@@ -1330,7 +1455,12 @@ if [[ "$INSTALL_CODEX" == "1" ]]; then
     info "Installing Codex plugin from $SOURCE"
     mkdir -p "$(dirname "$PLUGIN_DIR")"
     cp -R "$SOURCE" "$PLUGIN_DIR"
-    write_mcp_config "$PLUGIN_DIR/.mcp.json"
+    if [[ "$INSTALL_MODE" == "cli" ]]; then
+      write_mcp_config "$PLUGIN_DIR/.mcp.json"
+    else
+      rm -f "$PLUGIN_DIR/.mcp.json"
+      info "REST mode: removed Codex plugin MCP manifest so the skill uses REST fallback"
+    fi
 
     if [[ "$WRITE_GLOBAL_SKILL" == "1" ]]; then
       install_codex_global_skill "$PLUGIN_DIR" "$CODEX_SKILL_DIR"
@@ -1342,8 +1472,13 @@ if [[ "$INSTALL_CODEX" == "1" ]]; then
     fi
 
     if [[ "$WRITE_MCP_CONFIG" == "1" ]]; then
-      write_codex_mcp_config "$CODEX_CONFIG"
-      info "Registered MCP server '$MCP_SERVER_NAME' in $CODEX_CONFIG"
+      if [[ "$INSTALL_MODE" == "cli" ]]; then
+        write_codex_mcp_config "$CODEX_CONFIG"
+        info "Registered MCP server '$MCP_SERVER_NAME' in $CODEX_CONFIG"
+      else
+        remove_codex_mcp_config "$CODEX_CONFIG"
+        info "REST mode: removed MCP server '$MCP_SERVER_NAME' from $CODEX_CONFIG"
+      fi
     fi
   fi
 fi
@@ -1363,7 +1498,8 @@ fi
 run_cli_init
 
 info "Install complete"
-cat <<SUMMARY
+if [[ "$INSTALL_MODE" == "cli" ]]; then
+  cat <<SUMMARY
 
 Next checks:
   Codex:   restart Codex, list skills, and verify the pam_os_memory MCP server.
@@ -1400,3 +1536,39 @@ MCP environment:
   $MCP_ENV_JSON
 
 SUMMARY
+else
+  cat <<SUMMARY
+
+Next checks:
+  Codex:   restart Codex, list skills, and verify the pam-os-memory skill uses REST.
+  Claude:  restart Claude Code, then list skills or invoke /pam-os-memory.
+  OpenCode: restart opencode so it reloads AGENTS.md guidance.
+  Hermes:  restart Hermes and verify PAM-OS guidance uses REST.
+
+Marketplace:
+  $MARKETPLACE_PATH
+
+Skill paths:
+  $CODEX_SKILL_DIR
+  $CLAUDE_SKILL_DIR
+
+Guidance/config:
+  $OPENCODE_AGENTS_FILE
+  $HERMES_CONFIG
+  $HERMES_AGENTS_FILE
+
+Managed/runtime repo:
+  $REPO_DIR
+
+MCP:
+  disabled for REST mode; managed pam_os_memory registrations were removed when writable.
+
+Runtime:
+  REST API
+
+Skill runtime:
+  mode: $INSTALL_MODE
+  REST URL: $REST_URL
+
+SUMMARY
+fi

@@ -93,7 +93,7 @@ Options:
   --repo-dir DIR      Use an existing PAM-OS repo for MCP/dev mode. Default: $DefaultRepoDir.
   --repo-url URL      Git repository used to refresh the managed repo. Default: $DefaultRepoUrl.
   --ref REF           Git ref used to refresh the managed repo. Default: master.
-  --mode cli|rest     Set skill fallback runtime mode. Default: prompt, then cli.
+  --mode cli|rest     Set runtime mode. CLI registers local MCP; REST uses HTTP skill fallback.
   --runtime cli|rest  Alias for --mode.
   --rest-url URL      PAM-OS REST server URL. Default: http://127.0.0.1:8765.
   --rest-username USER
@@ -116,8 +116,10 @@ Options:
 Without a target option, the installer prompts for targets. With --yes and no
 target option, it installs Codex only.
 
-The Codex target installs the plugin, writes a marketplace entry, installs the
-global skill fallback, and registers a stdio MCP server in Codex config.toml.
+The Codex target installs the plugin, writes a marketplace entry, and installs
+the global skill fallback. CLI mode registers a stdio MCP server in Codex
+config.toml; REST mode removes managed PAM-OS MCP registrations so the skill
+uses the configured REST API.
 "@
 }
 
@@ -798,6 +800,44 @@ function Write-CodexMcpConfig {
     Set-Content -LiteralPath $Path -Value $output -Encoding UTF8
 }
 
+
+function Remove-CodexMcpConfig {
+    param([string]$Path)
+
+    $serverHeader = "[mcp_servers.$McpServerName]"
+    $serverChildPrefix = "[mcp_servers.$McpServerName."
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+
+    $lines = Get-Content -LiteralPath $Path
+    $output = New-Object System.Collections.Generic.List[string]
+    $index = 0
+    $removed = $false
+    while ($index -lt $lines.Count) {
+        $line = $lines[$index]
+        $stripped = $line.Trim()
+        if ($stripped -eq $serverHeader -or $stripped.StartsWith($serverChildPrefix)) {
+            $removed = $true
+            $index++
+            while ($index -lt $lines.Count) {
+                $next = $lines[$index].Trim()
+                if ($next.StartsWith("[") -and $next.EndsWith("]") -and -not ($next -eq $serverHeader -or $next.StartsWith($serverChildPrefix))) {
+                    break
+                }
+                $index++
+            }
+            continue
+        }
+        $output.Add($line)
+        $index++
+    }
+
+    if ($removed) {
+        Set-Content -LiteralPath $Path -Value $output -Encoding UTF8
+    }
+}
+
 function Update-ManagedGuidance {
     param(
         [string]$File,
@@ -847,7 +887,12 @@ function Update-ManagedGuidance {
     $output.Add("")
     $output.Add("Use PAM-OS as local long-term memory when a task depends on user preferences, project history, prior decisions, long-term goals, answer style, or an explicit request to remember something.")
     $output.Add("")
-    $output.Add("Prefer MCP tools from the pam_os_memory server when available. If MCP is unavailable, read the installed skill instructions from ``$SkillPath``.")
+    if ($script:InstallMode -eq "rest") {
+        $output.Add("Use the installed PAM-OS skill and its REST configuration from ``$SkillPath``. Do not prefer a local MCP server unless the user explicitly re-enables MCP.")
+    }
+    else {
+        $output.Add("Prefer MCP tools from the pam_os_memory server when available. If MCP is unavailable, read the installed skill instructions from ``$SkillPath``.")
+    }
     $output.Add("")
     $output.Add("Do not store secrets or sensitive details unless the user explicitly asks to remember them.")
     $output.Add($end)
@@ -934,6 +979,52 @@ function Write-HermesMcpConfig {
     Set-Content -LiteralPath $Path -Value $output -Encoding UTF8
 }
 
+
+function Remove-HermesMcpConfig {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return
+    }
+
+    $lines = Get-Content -LiteralPath $Path
+    $output = New-Object System.Collections.Generic.List[string]
+    $index = 0
+    $inMcp = $false
+    $removed = $false
+    while ($index -lt $lines.Count) {
+        $line = $lines[$index]
+        $stripped = $line.Trim()
+        if ($line -eq "mcp_servers:") {
+            $inMcp = $true
+            $output.Add($line)
+            $index++
+            continue
+        }
+        if ($inMcp -and $line.StartsWith("  ") -and $stripped -eq "${McpServerName}:") {
+            $removed = $true
+            $index++
+            while ($index -lt $lines.Count) {
+                $next = $lines[$index]
+                if ($next -and -not $next.StartsWith("    ") -and -not $next.StartsWith("      ")) {
+                    break
+                }
+                $index++
+            }
+            continue
+        }
+        if ($inMcp -and $line -and -not $line.StartsWith(" ")) {
+            $inMcp = $false
+        }
+        $output.Add($line)
+        $index++
+    }
+
+    if ($removed) {
+        Set-Content -LiteralPath $Path -Value $output -Encoding UTF8
+    }
+}
+
 function Invoke-CliInit {
     if ($script:InstallMode -ne "cli" -or -not $script:RunInit) {
         return
@@ -965,7 +1056,8 @@ function Invoke-CliInit {
 
 function Show-Summary {
     $mcpEnvJson = $script:McpEnv | ConvertTo-Json -Compress
-    @"
+    if ($script:InstallMode -eq "cli") {
+        @"
 
 Done.
 
@@ -1002,6 +1094,45 @@ Skill fallback runtime:
 
 MCP environment:
   $mcpEnvJson
+
+"@ | Write-Host
+        return
+    }
+
+    @"
+
+Done.
+
+Next checks:
+  Codex:   restart Codex, list skills, and verify the pam-os-memory skill uses REST.
+  Claude:  restart Claude Code, then list skills or invoke /pam-os-memory.
+  OpenCode: restart opencode so it reloads AGENTS.md guidance.
+  Hermes:  restart Hermes and verify PAM-OS guidance uses REST.
+
+Marketplace:
+  $($script:MarketplacePath)
+
+Skill paths:
+  $($script:CodexSkillDir)
+  $($script:ClaudeSkillDir)
+
+Guidance/config:
+  $($script:OpenCodeAgentsFile)
+  $($script:HermesConfig)
+  $($script:HermesAgentsFile)
+
+Managed/runtime repo:
+  $($script:RepoDir)
+
+MCP:
+  disabled for REST mode; managed pam_os_memory registrations were removed when writable.
+
+Runtime:
+  REST API
+
+Skill runtime:
+  mode: $($script:InstallMode)
+  REST URL: $($script:RestUrl)
 
 "@ | Write-Host
 }
@@ -1217,8 +1348,8 @@ try {
         else {
             Write-Host ""
             Write-Host "Runtime mode:"
-            Write-Host "  1) cli  - no long-running server; model runs the local memory CLI"
-            Write-Host "  2) rest - model calls a running PAM-OS REST server"
+            Write-Host "  1) cli  - register local MCP runtime; CLI fallback remains available"
+            Write-Host "  2) rest - use a running PAM-OS REST server and remove managed local MCP"
             $modeChoice = Read-User "Selection [1]"
             if ([string]::IsNullOrWhiteSpace($modeChoice)) {
                 $modeChoice = "1"
@@ -1281,7 +1412,13 @@ try {
         if (Prepare-Destination $script:PluginDir "Codex plugin") {
             Write-Info "Installing Codex plugin from $pluginSource"
             Copy-Directory $pluginSource $script:PluginDir
-            Write-McpJson (Join-Path $script:PluginDir ".mcp.json")
+            if ($script:InstallMode -eq "cli") {
+                Write-McpJson (Join-Path $script:PluginDir ".mcp.json")
+            }
+            else {
+                Remove-Item -LiteralPath (Join-Path $script:PluginDir ".mcp.json") -Force -ErrorAction SilentlyContinue
+                Write-Info "REST mode: removed Codex plugin MCP manifest so the skill uses REST fallback"
+            }
 
             if ($script:WriteGlobalSkill) {
                 Install-CodexGlobalSkill $script:PluginDir $script:CodexSkillDir
@@ -1291,8 +1428,14 @@ try {
                 Write-Info "Updated marketplace: $($script:MarketplacePath)"
             }
             if ($script:WriteMcpConfig) {
-                Write-CodexMcpConfig $script:CodexConfig
-                Write-Info "Registered MCP server '$McpServerName' in $($script:CodexConfig)"
+                if ($script:InstallMode -eq "cli") {
+                    Write-CodexMcpConfig $script:CodexConfig
+                    Write-Info "Registered MCP server $McpServerName in $($script:CodexConfig)"
+                }
+                else {
+                    Remove-CodexMcpConfig $script:CodexConfig
+                    Write-Info "REST mode: removed MCP server $McpServerName from $($script:CodexConfig)"
+                }
             }
         }
         else {
@@ -1318,9 +1461,17 @@ try {
 
     if ($script:InstallHermes) {
         Write-Info "Installing Hermes compatibility"
-        Write-HermesMcpConfig $script:HermesConfig
+        if ($script:WriteMcpConfig) {
+            if ($script:InstallMode -eq "cli") {
+                Write-HermesMcpConfig $script:HermesConfig
+                Write-Host "Updated: $($script:HermesConfig)"
+            }
+            else {
+                Remove-HermesMcpConfig $script:HermesConfig
+                Write-Host "Removed PAM-OS MCP server from: $($script:HermesConfig)"
+            }
+        }
         Update-ManagedGuidance $script:HermesAgentsFile (Join-Path $skillSource "SKILL.md")
-        Write-Host "Updated: $($script:HermesConfig)"
         Write-Host "Updated: $($script:HermesAgentsFile)"
     }
 
