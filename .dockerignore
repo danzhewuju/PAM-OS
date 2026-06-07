@@ -10,3 +10,10 @@ build
 *.egg-info
 .pam-os
 config/pam-os.toml
+skills/**/config.toml
+plugins/**/config.toml
+.env
+.env.*
+*.sqlite
+*.sqlite3
+*.db

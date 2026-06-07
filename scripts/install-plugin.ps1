@@ -521,6 +521,28 @@ function Test-PluginSource {
     )
 }
 
+function Get-PluginManifestVersion {
+    param([string]$PluginPath)
+
+    $manifestPath = Join-PathMany @($PluginPath, ".codex-plugin", "plugin.json")
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        Stop-Install "Plugin manifest not found: $manifestPath"
+    }
+
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        Stop-Install "Could not parse plugin manifest: $manifestPath"
+    }
+
+    $version = [string]$manifest.version
+    if ([string]::IsNullOrWhiteSpace($version)) {
+        Stop-Install "Plugin manifest must define a non-empty version: $manifestPath"
+    }
+    return $version
+}
+
 function Test-SkillSource {
     param([string]$Path)
     return (
@@ -917,6 +939,7 @@ function Install-Claude {
 function Write-MarketplaceConfig {
     param([string]$Path)
 
+    $pluginVersion = Get-PluginManifestVersion $script:PluginDir
     $payloadIsDictionary = $false
     if (Test-Path -LiteralPath $Path -PathType Leaf) {
         $payload = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
@@ -967,7 +990,7 @@ function Write-MarketplaceConfig {
             authentication = "ON_INSTALL"
         }
         category = "Productivity"
-        version = "0.2.1"
+        version = $pluginVersion
     }
 
     $plugins = @($currentPlugins)

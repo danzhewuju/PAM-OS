@@ -1259,13 +1259,13 @@ def test_version_cli_outputs_current_version(capsys):
 
 
 def test_update_check_cli_compares_versions_offline(capsys):
-    exit_code = main(["update-check", "--latest-version", "v0.2.2", "--json"])
+    exit_code = main(["update-check", "--latest-version", "v99.0.0", "--json"])
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
     assert exit_code == 0
     assert payload["current_version"] == __version__
-    assert payload["latest_version"] == "0.2.2"
+    assert payload["latest_version"] == "99.0.0"
     assert payload["update_available"] is True
 
 
