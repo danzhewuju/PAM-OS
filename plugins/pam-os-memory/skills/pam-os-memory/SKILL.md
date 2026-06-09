@@ -75,6 +75,47 @@ REST endpoint equivalents:
 
 If REST `username` and `password` are non-empty, send HTTP Basic Auth on every REST request. If either value is empty, do not send an Authorization header.
 
+REST request bodies use JSON field names from `src/pam_os/api.py`; do not guess alternate names. In particular, memory text fields are named `content`, not `text`.
+
+Common POST bodies:
+
+```http
+POST /memory/capture
+{"content":"stable memory candidate","source":"codex","source_ref":null,"metadata":{},"force":false}
+
+POST /events
+{"content":"raw event text","source":"manual","source_ref":null,"metadata":{},"extract":true}
+
+POST /context/prepare
+{"task":"current task","conversation_summary":null,"force":false,"limit":null,"max_chars":null}
+
+POST /behavior/choice
+{"context":"decision context","chosen":["selected option"],"rejected":[],"deferred":[],"reason":null,"source_ref":null}
+
+POST /turns/observe
+{"user_message":"user text","assistant_message":"assistant text","conversation_summary":null,"source_ref":null,"auto_capture":true,"auto_learn_policy":true}
+
+POST /memory/consolidate
+{"recent":null}
+
+POST /context/compile
+{"task":"current task","limit":null,"min_importance":0.0,"min_confidence":0.0}
+
+POST /reflect
+{"recent":50}
+
+POST /memory/clear
+{"confirm":true}
+```
+
+Minimal capture example:
+
+```bash
+curl -sS -X POST "$PAM_OS_URL/memory/capture" \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"Project decision: use SQLite FTS5 for local memory search.","source":"codex","force":true}'
+```
+
 ## CLI Fallback
 
 CLI fallback is available but may require shell execution approval. In CLI mode, run commands with `uv --directory "<repo_dir>" run ...` and pass `--db "<db_path>"`.
