@@ -110,7 +110,15 @@ Do not read memory for generic one-off factual questions unless the user explici
 
 When the user writes `pamw`, treat it as an explicit manual write shortcut. Review the current user/assistant conversation, extract concise stable memory candidates, and call `capture_memory` for those candidates. The text after `pamw` is only an optional extraction instruction, not the memory content to save verbatim. If no stable preference, project decision, goal, durable style guidance, correction, or workflow choice is present, say that nothing durable was found instead of writing transient chat.
 
-After each substantial user-facing task, quickly check whether the turn contains stable information worth keeping. If yes, call `capture_memory` with a concise normalized candidate rather than the raw conversation. Capture stable information only:
+After each substantial user-facing task, call `observe_turn` with the completed user message and assistant response, even when no obvious memory candidate is present. This is the default post-turn path that lets PAM-OS conservatively decide whether to capture stable memories, learn policy signals, or only write an audit trace. A substantial task is any user-facing turn that involved analysis, troubleshooting, implementation, planning, decisions, preferences, corrections, multi-step work, or project context; skip only brief acknowledgements, purely mechanical status updates, and failed turns with no useful answer.
+
+Use this payload shape for the default observation:
+
+```json
+{"user_message":"user text","assistant_message":"assistant response","conversation_summary":null,"source_ref":null,"auto_capture":true,"auto_learn_policy":true}
+```
+
+Do not replace `observe_turn` with `capture_memory` for normal turns. Use `capture_memory` in addition only when the user explicitly asks to remember/import something or when a concise stable fact is so clear that direct capture is useful. Capture stable information only:
 
 - preferences: "I prefer self-hosted tools"
 - goals: "My goal is to build..."

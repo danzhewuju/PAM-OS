@@ -935,6 +935,7 @@ append_managed_guidance() {
       printf 'Prefer the PAM-OS MCP server when available. If a compatible skill is available, use it; otherwise read the installed skill instructions from `%s`.\n\n' "$skill_path"
     fi
     printf 'Do not store secrets or sensitive details unless the user explicitly asks to remember them.\n'
+    printf 'After each substantial user-facing turn, call observe_turn with the user message and assistant response so PAM-OS can conservatively capture stable memory, learn policy, or only write an audit trace.\n'
     printf '%s\n' "$end"
   } >> "$tmp"
 

@@ -15,6 +15,7 @@ Skill 不再承担主要执行入口。日常优先通过 MCP tools 调用：
 - `prepare_context`
 - `capture_memory`
 - `record_behavior_choice`
+- `observe_turn`
 - `consolidate_memory`
 - `get_profile`
 - `search_memory`
@@ -50,7 +51,7 @@ plugins/pam-os-memory/
 - OpenCode：`~/.config/opencode/AGENTS.md`，并复用 Claude-compatible skill
 - Hermes：`~/.hermes/config.yaml` 和 `~/.hermes/AGENTS.md`
 
-本地开发时才显式传 `--repo-dir /path/to/PAM-OS` 或 `--source /path/to/plugins/pam-os-memory`。非交互 Codex REST 安装可以运行 `./scripts/install-plugin.sh --codex --mode rest --rest-url http://127.0.0.1:8765 --yes`。重启客户端后，skill 策略才会在合适场景触发 PAM 读写；默认只捕获稳定偏好、项目决策、长期目标和纠正，不写入每一轮闲聊。
+本地开发时才显式传 `--repo-dir /path/to/PAM-OS` 或 `--source /path/to/plugins/pam-os-memory`。非交互 Codex REST 安装可以运行 `./scripts/install-plugin.sh --codex --mode rest --rest-url http://127.0.0.1:8765 --yes`。重启客户端后，skill 策略才会在合适场景触发 PAM 读写；默认会在每个 substantial user-facing turn 后调用 `observe_turn`，由 PAM-OS 保守决定是否捕获稳定偏好、项目决策、长期目标和纠正，短暂闲聊只保留审计或直接跳过。
 
 这份文档说明如何让大模型通过 PAM-OS skill 使用本地长期记忆。当前推荐有两种安装模式：CLI 模式会注册本地 MCP tools；REST 模式会移除安装器管理的本地 MCP 注册，让 skill 直接按 `config.toml` 调 REST。
 
@@ -121,6 +122,7 @@ mode = "cli"
 
 ```powershell
 uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" prepare "按我的偏好，下一步怎么做？" --json
+uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" observe-turn "<user message>" --assistant-message "<assistant response>"
 uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" capture "我偏好本地优先、轻量、可控的技术方案。"
 uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" behavior-choice --context "技术路线" --chosen "SQLite FTS5" --rejected "Qdrant"
 uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" consolidate --recent 100

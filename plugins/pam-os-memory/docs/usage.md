@@ -15,4 +15,4 @@ The installer refreshes the managed PAM-OS repo at `~/.local/share/pam-os/repo`,
 
 The MCP server command points at the managed repo and the shared database at `~/.pam-os/memory.sqlite3`. For local development, pass `--repo-dir /path/to/PAM-OS` or `--source /path/to/plugins/pam-os-memory` explicitly.
 
-After restarting Codex, the global skill fallback lets Codex load the PAM-OS memory policy even if the plugin UI has not refreshed yet. The policy captures stable preferences, project decisions, goals, and corrections; it does not write every chat turn.
+After restarting Codex, the global skill fallback lets Codex load the PAM-OS memory policy even if the plugin UI has not refreshed yet. The policy calls `observe_turn` after each substantial user-facing turn so PAM-OS can conservatively capture stable preferences, project decisions, goals, and corrections while skipping transient chat.

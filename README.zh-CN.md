@@ -264,6 +264,7 @@ Codex Plugin
 
 - `prepare_context`
 - `capture_memory`
+- `observe_turn`
 - `record_behavior_choice`
 - `consolidate_memory`
 - `get_profile`

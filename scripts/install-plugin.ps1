@@ -1184,6 +1184,7 @@ function Update-ManagedGuidance {
     }
     $output.Add("")
     $output.Add("Do not store secrets or sensitive details unless the user explicitly asks to remember them.")
+    $output.Add("After each substantial user-facing turn, call observe_turn with the user message and assistant response so PAM-OS can conservatively capture stable memory, learn policy, or only write an audit trace.")
     $output.Add($end)
 
     Set-Content -LiteralPath $File -Value $output -Encoding UTF8
