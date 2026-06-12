@@ -1,7 +1,7 @@
 {
   "name": "pam-os-memory",
-  "version": "0.3.0",
-  "description": "Use PAM-OS local-first long-term memory from Codex, including context prep for project troubleshooting, analysis, solving, optimization, and automatic post-answer capture of stable preferences and project decisions.",
+  "version": "0.3.1",
+  "description": "Use PAM-OS local-first long-term memory from AI assistants and coding agents, including context prep for project troubleshooting, analysis, solving, optimization, and automatic post-answer capture of stable preferences and project decisions.",
   "author": {
     "name": "PAM-OS"
   },
@@ -11,14 +11,17 @@
     "memory",
     "local-first",
     "mcp",
-    "codex"
+    "codex",
+    "claude",
+    "opencode",
+    "hermes"
   ],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "PAM-OS Memory",
-    "shortDescription": "Local-first long-term memory for Codex.",
-    "longDescription": "PAM-OS provides local SQLite-backed memory through a Codex skill and MCP tools for preparing context before project troubleshooting, analysis, solving, optimization, and implementation work, automatically maintaining stable memories after answers, recording behavior choices, and reading profile traits.",
+    "shortDescription": "Local-first long-term memory for coding agents.",
+    "longDescription": "PAM-OS provides local SQLite-backed memory through skills, MCP tools, REST, and CLI adapters for preparing context before project troubleshooting, analysis, solving, optimization, and implementation work, automatically maintaining stable memories after answers, recording behavior choices, and reading profile traits. This manifest is the Codex adapter for the multi-client PAM-OS memory package.",
     "developerName": "PAM-OS",
     "category": "Productivity",
     "capabilities": [

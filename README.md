@@ -244,9 +244,11 @@ uv run --python 3.12 memory consolidate --recent 100
 uv run --python 3.12 memory profile
 ```
 
-## Codex Plugin and MCP
+## Multi-Client Plugin and MCP
 
-The repository includes a Codex plugin package:
+The repository includes a multi-client PAM-OS memory package. The `.codex-plugin`
+directory is only the Codex adapter manifest; Claude Code, OpenCode, and Hermes
+installation use the shared skill and generated client configuration instead.
 
 ```text
 plugins/pam-os-memory/
@@ -258,9 +260,9 @@ plugins/pam-os-memory/
 The recommended integration is:
 
 ```text
-Codex Plugin
-  |-- MCP server registration  # tool execution
-  `-- pam-os-memory skill      # memory usage policy
+Client adapter
+  |-- MCP or REST configuration  # tool execution
+  `-- pam-os-memory skill        # memory usage policy
 ```
 
 Available MCP tools:

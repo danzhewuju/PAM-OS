@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.3.1
+
+### Added
+- Added manual capture feedback learning so explicit `pamw`/manual memory requests can reinforce capture policy signals.
+- Added storage diagnostics for manual capture events, manual overrides, skipped manual captures, capture reasons, and capture policy decisions.
+- Added assistant-message capture during `observe_turn`, allowing stable project conclusions from assistant summaries to be considered for memory capture with separate risk tracking.
+
+### Changed
+- Reframed the PAM-OS memory plugin package as multi-client, while keeping `.codex-plugin` as the Codex-specific adapter manifest.
+- Updated post-turn memory guidance so substantial user-facing turns use `observe_turn` by default, even when no obvious memory candidate is present.
+- Clarified that `capture_memory` should supplement, not replace, `observe_turn` for normal conversation turns, and should be reserved for explicit remember/import requests or very clear stable facts.
+- Generalized the `pam-os-memory` skill wording from Codex-only language to AI assistants and coding agents where appropriate.
+
+### Documentation
+- Clarified that Claude Code, OpenCode, and Hermes installs use the shared skill and generated client configuration rather than the Codex plugin manifest.
+- Updated README and usage documentation to list `observe_turn` as an available MCP tool and describe the default post-turn observation workflow.
+- Updated plugin installer guidance for Codex, OpenCode, and Hermes targets so managed instructions tell clients to call `observe_turn` after substantial user-facing turns.
+- Updated plugin usage documentation to explain conservative automatic capture through `observe_turn` while skipping transient chat.
+
+### Tests
+- Added runtime coverage for manual capture policy learning, manual override diagnostics, storage/inspect diagnostics, and assistant-summary capture through `observe_turn`.
+
 ## v0.3.0 - 2026-06-07
 
 ### Added
@@ -34,7 +56,7 @@
 - Added tests for REST API clear, inspect, search filtering, request validation, and authentication behavior.
 - Added tests for storage stats, memory inspection, config environment overrides, and filtered context compilation.
 - Added version consistency checks for project metadata, plugin manifest, lockfile, and release-tag examples.
-- Updated offline update-check tests for the `0.3.0` release line.
+- Updated offline update-check tests for the `0.3.1` release line.
 
 ## v0.2.1 - 2026-06-02
 

@@ -241,9 +241,11 @@ uv run --python 3.12 memory consolidate --recent 100
 uv run --python 3.12 memory profile
 ```
 
-## Codex 插件与 MCP
+## 多端插件与 MCP
 
-仓库包含一个 Codex 插件包：
+仓库包含一个多端 PAM-OS memory 包。`.codex-plugin` 目录只是 Codex
+适配器 manifest；Claude Code、OpenCode 和 Hermes 安装使用共享的 skill
+以及安装器生成的客户端配置。
 
 ```text
 plugins/pam-os-memory/
@@ -255,9 +257,9 @@ plugins/pam-os-memory/
 推荐集成方式：
 
 ```text
-Codex Plugin
-  |-- MCP server registration  # tool execution
-  `-- pam-os-memory skill      # memory usage policy
+Client adapter
+  |-- MCP or REST configuration  # tool execution
+  `-- pam-os-memory skill        # memory usage policy
 ```
 
 可用 MCP 工具：

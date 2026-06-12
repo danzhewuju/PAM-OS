@@ -1,12 +1,12 @@
 # PAM-OS Skill 使用指南
 
-## 0. 推荐中期形态：Plugin + MCP + Skill
+## 0. 推荐中期形态：Multi-Client Package + MCP + Skill
 
 PAM-OS 的中期集成推荐是：
 
 ```text
-Codex Plugin
-  ├─ MCP server registration  # 稳定工具入口
+Client adapter
+  ├─ MCP 或 REST 配置          # 稳定工具入口
   └─ pam-os-memory skill      # 何时读写记忆的行为策略
 ```
 
@@ -22,7 +22,7 @@ Skill 不再承担主要执行入口。日常优先通过 MCP tools 调用：
 
 REST 和 CLI 继续保留作为 fallback。CLI fallback 可能触发 shell 执行授权，因此不再作为最佳体验路径。
 
-当前仓库提供 Codex plugin 包，并通过统一安装器支持 Codex、Claude Code、OpenCode 和 Hermes：
+当前仓库提供多端 PAM-OS memory 包，并通过统一安装器支持 Codex、Claude Code、OpenCode 和 Hermes。`.codex-plugin` 目录只是 Codex adapter manifest；Claude Code、OpenCode 和 Hermes 不依赖它来加载 skill：
 
 ```text
 plugins/pam-os-memory/
