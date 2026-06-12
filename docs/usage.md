@@ -378,6 +378,17 @@ uv run --python 3.12 --extra api memory serve --host 127.0.0.1 --port 8765
 | `GET` | `/storage/stats` | 查看存储概览。 |
 | `POST` | `/memory/clear` | 清空所有记忆数据（需 `confirm: true`）。 |
 
+REST 模式支持可选的用户作用域。客户端可以在请求体或查询参数中传 `user_id`，也可以发送 `X-PAM-OS-User` header；两者同时存在时，请求体/查询参数优先。未传 `user_id` 时沿用默认数据库。传入 `user_id` 后，PAM-OS 会在同目录下使用独立 SQLite 文件，例如默认库为 `memory.sqlite3`、用户为 `alice` 时会使用 `memory.alice.sqlite3`，从而隔离 memory、profile、policy signal 和 trace。
+
+`user_id` 仅允许字母、数字、`_`、`-`、`.` 和 `@`，并且必须以字母或数字开头。示例：
+
+```bash
+curl -sS -H 'Content-Type: application/json' \
+  -H 'X-PAM-OS-User: alice' \
+  -X POST http://127.0.0.1:8765/memory/capture \
+  -d '{"content":"Alice prefers quiet engineering answers.","force":true}'
+```
+
 ### 8.1 Docker 部署
 
 当前仓库提供 `Dockerfile`，镜像默认启动 REST API，监听 `0.0.0.0:8765`，并将 SQLite 数据库放在 `/data/memory.sqlite3`。

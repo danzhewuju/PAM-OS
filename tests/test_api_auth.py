@@ -155,3 +155,79 @@ def test_search_memory_rest_api_supports_type_and_score_filters(tmp_path):
 
     assert payload
     assert {item["memory"]["type"] for item in payload} == {"identity"}
+
+
+def test_rest_user_id_scopes_memory_and_profile_storage(tmp_path):
+    app = create_app(db_path=tmp_path / "memory.sqlite3")
+    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/capture")
+    search_route = next(route for route in app.routes if getattr(route, "path", None) == "/memories/search")
+    stats_route = next(route for route in app.routes if getattr(route, "path", None) == "/storage/stats")
+    health_route = next(route for route in app.routes if getattr(route, "path", None) == "/health")
+
+    alice_request = type(
+        "CaptureRequest",
+        (),
+        {
+            "content": "Alice prefers quiet engineering answers.",
+            "source": "conversation",
+            "source_ref": None,
+            "metadata": {},
+            "force": True,
+            "user_id": "alice",
+        },
+    )()
+    bob_request = type(
+        "CaptureRequest",
+        (),
+        {
+            "content": "Bob prefers concise product answers.",
+            "source": "conversation",
+            "source_ref": None,
+            "metadata": {},
+            "force": True,
+            "user_id": "bob",
+        },
+    )()
+
+    alice_capture = capture_route.endpoint(alice_request)
+    capture_route.endpoint(bob_request)
+
+    assert alice_capture["event"]["metadata"]["rest_user_id"] == "alice"
+    assert health_route.endpoint(user_id="alice")["db_path"].endswith("memory.alice.sqlite3")
+
+    alice_results = search_route.endpoint(
+        q="Alice",
+        limit=10,
+        memory_types=None,
+        min_importance=0.0,
+        min_confidence=0.0,
+        user_id="alice",
+    )
+    bob_results = search_route.endpoint(
+        q="Alice",
+        limit=10,
+        memory_types=None,
+        min_importance=0.0,
+        min_confidence=0.0,
+        user_id="bob",
+    )
+
+    alice_stats = stats_route.endpoint(user_id="alice")
+    bob_stats = stats_route.endpoint(user_id="bob")
+
+    assert alice_results
+    assert not bob_results
+    assert alice_stats["user_id"] == "alice"
+    assert bob_stats["user_id"] == "bob"
+    assert alice_stats["tables"]["events"]["count"] == 1
+    assert bob_stats["tables"]["events"]["count"] == 1
+
+
+def test_rest_user_id_rejects_unsafe_values(tmp_path):
+    app = create_app(db_path=tmp_path / "memory.sqlite3")
+    health_route = next(route for route in app.routes if getattr(route, "path", None) == "/health")
+
+    with pytest.raises(Exception) as exc:
+        health_route.endpoint(user_id="../alice")
+
+    assert "400" in str(exc.value)
