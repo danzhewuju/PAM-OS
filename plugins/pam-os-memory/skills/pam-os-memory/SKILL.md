@@ -1,6 +1,6 @@
 ---
 name: pam-os-memory
-description: Use PAM-OS as the user's local long-term memory for Codex. Trigger when the user asks to continue prior work, refer to personal preferences, project history, previous decisions, long-term goals, answer style, or asks Codex to remember/capture stable information. Also trigger before project work phrased as "help me troubleshoot/debug/analyze/solve/optimize/fix/implement", including Chinese requests like "帮我排查", "帮我分析", "解决一下", and "优化一下这个项目", because those often depend on prior project context. Treat "pamr" as an explicit read shortcut and "pamw" as an explicit write shortcut that reviews the current user/AI conversation, extracts stable memory candidates, and writes those candidates to PAM-OS. Also use it after answering when the turn contains stable preferences, project decisions, workflow choices, corrections, or durable style guidance that should be remembered automatically. Prefer PAM-OS MCP tools when available; use REST only when configured; use CLI only as a fallback.
+description: Use PAM-OS as the user's local long-term memory for AI assistants and coding agents. Trigger when the user asks to continue prior work, refers to personal preferences, project history, previous decisions, long-term goals, answer style, or asks the assistant to remember/capture stable information. Also trigger before project work phrased as "help me troubleshoot/debug/analyze/solve/optimize/fix/implement", including Chinese requests like "帮我排查", "帮我分析", "解决一下", and "优化一下这个项目", because those often depend on prior project context. Treat "pamr" as an explicit read shortcut and "pamw" as an explicit write shortcut that reviews the current user/assistant conversation, extracts stable memory candidates, and writes those candidates to PAM-OS. Also use it after answering when the turn contains stable preferences, project decisions, workflow choices, corrections, or durable style guidance that should be remembered automatically. Prefer PAM-OS MCP tools when available in the host client; use REST only when configured; use CLI only as a fallback.
 ---
 
 # PAM-OS Memory
@@ -81,7 +81,7 @@ Common POST bodies:
 
 ```http
 POST /memory/capture
-{"content":"stable memory candidate","source":"codex","source_ref":null,"metadata":{},"force":false}
+{"content":"stable memory candidate","source":"assistant","source_ref":null,"metadata":{},"force":false}
 
 POST /events
 {"content":"raw event text","source":"manual","source_ref":null,"metadata":{},"extract":true}
@@ -113,7 +113,7 @@ Minimal capture example:
 ```bash
 curl -sS -X POST "$PAM_OS_URL/memory/capture" \
   -H 'Content-Type: application/json' \
-  -d '{"content":"Project decision: use SQLite FTS5 for local memory search.","source":"codex","force":true}'
+  -d '{"content":"Project decision: use SQLite FTS5 for local memory search.","source":"assistant","force":true}'
 ```
 
 ## CLI Fallback
@@ -149,7 +149,7 @@ Do not read memory for generic one-off factual questions unless the user explici
 
 ## After Answering
 
-When the user writes `pamw`, treat it as an explicit manual write shortcut. Review the current user/AI conversation, extract concise stable memory candidates, and call `capture_memory` for those candidates. The text after `pamw` is only an optional extraction instruction, not the memory content to save verbatim. If no stable preference, project decision, goal, durable style guidance, correction, or workflow choice is present, say that nothing durable was found instead of writing transient chat.
+When the user writes `pamw`, treat it as an explicit manual write shortcut. Review the current user/assistant conversation, extract concise stable memory candidates, and call `capture_memory` for those candidates. The text after `pamw` is only an optional extraction instruction, not the memory content to save verbatim. If no stable preference, project decision, goal, durable style guidance, correction, or workflow choice is present, say that nothing durable was found instead of writing transient chat.
 
 After each substantial user-facing task, quickly check whether the turn contains stable information worth keeping. If yes, call `capture_memory` with a concise normalized candidate rather than the raw conversation. Capture stable information only:
 

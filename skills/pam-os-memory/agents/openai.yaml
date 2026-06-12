@@ -1,4 +1,4 @@
 interface:
   display_name: "PAM-OS Memory"
-  short_description: "Use PAM-OS local memory from Codex."
+  short_description: "Use PAM-OS local memory from AI assistants."
   default_prompt: "Use PAM-OS memory for this task."

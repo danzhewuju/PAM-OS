@@ -702,6 +702,47 @@ def test_adaptive_policy_learns_capture_signal(tmp_path):
     assert captured.memories
 
 
+def test_pamw_metadata_learns_manual_capture_signal_and_reports_diagnostics(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory(
+        "用户当前在处理 Flink on Kubernetes 的节点 label 与调度匹配问题。",
+        metadata={"trigger": "pamw", "scope": "project"},
+    )
+
+    assert captured.should_capture is True
+    assert "manual_memory_request" in captured.event.metadata["capture_signals"]
+
+    signals = runtime.list_policy_signals(signal_type="capture", action="capture_memory", statuses=["active"])
+    assert any(signal.pattern == "feature:explicit_memory_intent" for signal in signals)
+
+    stats = runtime.get_storage_stats()
+    event_stats = stats.tables["events"]
+    assert event_stats["manual_capture_count"] == 1
+    assert event_stats["by_capture_policy_decision"]["capture"] == 1
+
+
+def test_forced_capture_records_manual_override_diagnostics(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    captured = runtime.capture_memory(
+        "哈哈好的",
+        metadata={"trigger": "pamw"},
+        force=True,
+    )
+
+    assert captured.should_capture is True
+    assert captured.event.metadata["manual_override"] is True
+    assert captured.event.metadata["capture_policy_decision"] == "skip_capture"
+    assert "manual override" in captured.reason
+
+    report = runtime.inspect_memory(table="events", limit=10)
+    event_stats = report["stats"]["tables"]["events"]
+    assert event_stats["manual_capture_count"] == 1
+    assert event_stats["manual_override_count"] == 1
+    assert event_stats["policy_skip_manual_capture_count"] == 1
+
+
 def test_observe_turn_learns_active_policy_signal_from_future_instruction(tmp_path):
     runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
 
@@ -727,6 +768,19 @@ def test_observe_turn_learns_active_policy_signal_from_future_instruction(tmp_pa
     operations = {trace["operation"] for trace in traces}
     assert "learn_policy_signal" in operations
     assert "observe_turn" in operations
+
+
+def test_observe_turn_captures_stable_assistant_summary(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+
+    observed = runtime.observe_turn(
+        user_message="帮我总结这次改动。",
+        assistant_message="项目决策：PAM-OS 的 observe_turn 应从助手总结中提取稳定项目结论。",
+    )
+
+    assert any(capture.event and capture.event.source == "assistant" for capture in observed.memory_captures)
+    memories = runtime.search_memory("observe_turn 助手总结", limit=5)
+    assert any("助手总结" in result.memory.content for result in memories)
 
 
 def test_observe_turn_stages_short_followup_as_candidate(tmp_path):

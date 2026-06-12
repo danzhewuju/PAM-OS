@@ -223,6 +223,7 @@ CAPTURE_SIGNALS = {
     "project": [
         "项目",
         "决定",
+        "决策",
         "当前项目",
         "当前阶段",
         "先用",
@@ -325,6 +326,7 @@ class RuleMemoryPolicy:
             _contains_marker(normalized, marker)
             for marker in [
                 "决定",
+                "决策",
                 "偏好",
                 "喜欢",
                 "名字",

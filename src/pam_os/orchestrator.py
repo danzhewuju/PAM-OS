@@ -102,7 +102,18 @@ class MemoryOrchestrator:
         decision = self.should_capture_memory(content, metadata)
         if not force and not decision.should_use:
             return CaptureResult(False, decision.reason)
-        capture_metadata = {**(metadata or {}), "capture_reason": decision.reason, "capture_signals": decision.signals}
+        manual_override = force and not decision.should_use
+        result_reason = decision.reason
+        if manual_override:
+            result_reason = f"manual override; policy would skip: {decision.reason}"
+        capture_metadata = {
+            **(metadata or {}),
+            "capture_reason": result_reason,
+            "capture_signals": decision.signals,
+            "capture_policy_decision": "capture" if decision.should_use else "skip_capture",
+            "capture_policy_confidence": decision.confidence,
+            "manual_override": manual_override,
+        }
         if hasattr(remember_func, "__self__") and getattr(remember_func, "__self__", None) is not None:
             runtime = remember_func.__self__
             extractor = getattr(runtime, "extractor", None)
@@ -117,7 +128,7 @@ class MemoryOrchestrator:
                 self.store.add_event(event)
                 candidates = extractor.extract(event.id, event.content, event.metadata)
                 memories, created_count, updated_count = self.store.upsert_deduped_memories(candidates)
-                reason = decision.reason
+                reason = result_reason
                 if updated_count and not created_count:
                     reason = f"{reason}; reinforced existing memory"
                 elif updated_count:
@@ -140,7 +151,7 @@ class MemoryOrchestrator:
         )
         return CaptureResult(
             True,
-            decision.reason,
+            result_reason,
             event=result["event"],
             memories=result["memories"],
             created_count=len(result["memories"]),

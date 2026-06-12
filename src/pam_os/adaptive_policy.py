@@ -222,6 +222,7 @@ class TextPolicyFeatureExtractor:
                 ],
                 "decision_statement": [
                     "决定",
+                    "决策",
                     "先用",
                     "不引入",
                     "我们先",
@@ -267,6 +268,9 @@ class TextPolicyFeatureExtractor:
         )
         if metadata.get("explicit_memory") is True:
             features.names.add("explicit_memory_intent")
+        if _metadata_indicates_manual_memory_request(metadata):
+            features.names.add("explicit_memory_intent")
+            features.names.add("manual_memory_request")
         if self._looks_transient(text):
             features.names.add("transient_chat")
         return PolicyFeatures(text=text, names=features.names)
@@ -535,6 +539,12 @@ def _pattern_matches(pattern: str, text: str) -> bool:
         except re.error:
             return False
     return pattern.lower() in text.lower()
+
+
+def _metadata_indicates_manual_memory_request(metadata: dict[str, Any]) -> bool:
+    trigger = str(metadata.get("trigger", "")).strip().lower()
+    source = str(metadata.get("source", "")).strip().lower()
+    return trigger == "pamw" or source == "codex_pamw"
 
 
 def _signal_matches(signal: PolicySignal, features: PolicyFeatures) -> bool:

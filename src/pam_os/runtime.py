@@ -240,8 +240,54 @@ class PersonalMemoryRuntime:
                 "memory_types": [memory.type for memory in result.memories],
             },
         )
+        self._maybe_learn_manual_capture_signal(
+            trace_id=trace_id,
+            content=content,
+            metadata=metadata or {},
+            result=result,
+        )
         self._maybe_auto_consolidate_after_capture(result)
         return result
+
+    def _maybe_learn_manual_capture_signal(
+        self,
+        *,
+        trace_id: str,
+        content: str,
+        metadata: dict[str, Any],
+        result: CaptureResult,
+    ):
+        if not result.should_capture or not _metadata_indicates_manual_capture(metadata):
+            return None
+        signal = self.learn_policy_signal_from_text(
+            signal_type="capture",
+            text=content,
+            normalized_intent="explicit_manual_memory_request",
+            action="capture_memory",
+            scope="workflow",
+            confidence=0.72,
+            source="manual_capture_feedback",
+            metadata={**metadata, "explicit_memory": True},
+        )
+        self._record_quality_trace(
+            trace_id=trace_id,
+            operation="learn_policy_signal",
+            stage="manual_capture_feedback",
+            input_summary=content,
+            provider=type(self.policy_learner).__name__,
+            decision=signal.status,
+            confidence=signal.confidence,
+            signals=["manual_memory_request"],
+            related_ids=[signal.id],
+            metrics={
+                "pattern": signal.pattern,
+                "normalized_intent": signal.normalized_intent,
+                "signal_type": signal.signal_type,
+                "action": signal.action,
+                "source": signal.source,
+            },
+        )
+        return signal
 
     def _maybe_auto_consolidate_after_capture(self, result: CaptureResult) -> None:
         config = self.config.consolidation
@@ -401,15 +447,34 @@ class PersonalMemoryRuntime:
 
         trace_id = new_id("trc")
         capture_risk = self.adaptive_learning_loop.admission_controller.risk_for_text(user_message)
+        assistant_capture_risk = (
+            self.adaptive_learning_loop.admission_controller.risk_for_text(assistant_message)
+            if assistant_message.strip()
+            else "low"
+        )
         memory_captures: list[CaptureResult] = []
         if auto_capture and capture_risk != "high":
             capture = self.capture_memory(
                 user_message,
                 source="conversation",
                 source_ref=source_ref,
-                metadata={"observed_turn": True},
+                metadata={"observed_turn": True, "observed_role": "user"},
             )
             memory_captures.append(capture)
+        if auto_capture and assistant_message.strip() and assistant_capture_risk != "high":
+            assistant_decision = self.should_capture_memory(
+                assistant_message,
+                {"observed_turn": True, "observed_role": "assistant"},
+            )
+            if assistant_decision.should_use:
+                memory_captures.append(
+                    self.capture_memory(
+                        assistant_message,
+                        source="assistant",
+                        source_ref=source_ref,
+                        metadata={"observed_turn": True, "observed_role": "assistant"},
+                    )
+                )
 
         outcomes: list[PolicyLearningOutcome] = []
         if auto_learn_policy:
@@ -470,7 +535,9 @@ class PersonalMemoryRuntime:
                 "auto_learn_policy": auto_learn_policy,
                 "source_ref": source_ref,
                 "capture_risk": capture_risk,
+                "assistant_capture_risk": assistant_capture_risk,
                 "auto_capture_skipped_high_risk": auto_capture and capture_risk == "high",
+                "assistant_auto_capture_skipped_high_risk": auto_capture and assistant_capture_risk == "high",
             },
         )
         return ObservedTurnResult(memory_captures=memory_captures, policy_outcomes=outcomes)
@@ -536,3 +603,9 @@ def _summarize_trace_input(value: str, *, max_chars: int = 240) -> str:
     if len(summary) <= max_chars:
         return summary
     return summary[: max_chars - 3].rstrip() + "..."
+
+
+def _metadata_indicates_manual_capture(metadata: dict[str, Any]) -> bool:
+    trigger = str(metadata.get("trigger", "")).strip().lower()
+    source = str(metadata.get("source", "")).strip().lower()
+    return trigger == "pamw" or source == "codex_pamw" or metadata.get("explicit_memory") is True

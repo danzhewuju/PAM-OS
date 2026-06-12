@@ -467,7 +467,11 @@ class MemoryStore:
 
         with self.connect() as conn:
             tables = {
-                "events": {"count": self._count_rows(conn, "events")},
+                "events": {
+                    "count": self._count_rows(conn, "events"),
+                    "by_source": self._grouped_counts(conn, "events", "source"),
+                    **self._event_capture_diagnostics(conn),
+                },
                 "memories": {
                     "count": self._count_rows(conn, "memories"),
                     "by_type": self._grouped_counts(conn, "memories", "type"),
@@ -1017,6 +1021,10 @@ class MemoryStore:
                 continue
             counts[table] = {"exists": True, "count": self._count_rows(conn, table)}
 
+        if "events" in existing_tables:
+            counts["events"]["by_source"] = self._grouped_counts(conn, "events", "source")
+            counts["events"].update(self._event_capture_diagnostics(conn))
+
         if "memories" in existing_tables:
             counts["memories"]["by_type"] = self._grouped_counts(conn, "memories", "type")
             counts["memories"]["unconsolidated_count"] = self._count_unconsolidated_memories(conn)
@@ -1031,6 +1039,44 @@ class MemoryStore:
             counts["policy_signals"]["by_status"] = self._grouped_counts(conn, "policy_signals", "status")
 
         return counts
+
+    def _event_capture_diagnostics(self, conn: sqlite3.Connection) -> dict[str, Any]:
+        diagnostics = {
+            "manual_capture_count": 0,
+            "manual_override_count": 0,
+            "policy_skip_manual_capture_count": 0,
+            "by_capture_reason": {},
+            "by_capture_policy_decision": {},
+        }
+        try:
+            rows = conn.execute("SELECT metadata_json FROM events").fetchall()
+        except sqlite3.OperationalError:
+            return diagnostics
+        reason_counts: dict[str, int] = {}
+        policy_counts: dict[str, int] = {}
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except json.JSONDecodeError:
+                metadata = {}
+            trigger = str(metadata.get("trigger", "")).strip().lower()
+            source = str(metadata.get("source", "")).strip().lower()
+            manual_capture = trigger == "pamw" or source == "codex_pamw" or metadata.get("explicit_memory") is True
+            if manual_capture:
+                diagnostics["manual_capture_count"] += 1
+            if metadata.get("manual_override") is True:
+                diagnostics["manual_override_count"] += 1
+            policy_decision = str(metadata.get("capture_policy_decision", "")).strip()
+            if policy_decision:
+                policy_counts[policy_decision] = policy_counts.get(policy_decision, 0) + 1
+            if manual_capture and policy_decision == "skip_capture":
+                diagnostics["policy_skip_manual_capture_count"] += 1
+            reason = str(metadata.get("capture_reason", "")).strip()
+            if reason:
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        diagnostics["by_capture_reason"] = reason_counts
+        diagnostics["by_capture_policy_decision"] = policy_counts
+        return diagnostics
 
     def _fetch_inspect_rows(
         self,
