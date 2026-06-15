@@ -860,6 +860,11 @@ function Remove-ClaudeMcpConfig {
 function Write-SkillConfig {
     param([string]$Path)
 
+    $parent = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+
     $escapedUrl = ConvertTo-TomlString $script:RestUrl
     $escapedUser = ConvertTo-TomlString $script:RestUsername
     $escapedPass = ConvertTo-TomlString $script:RestPassword
@@ -885,6 +890,32 @@ username = "$escapedUser"
 password = "$escapedPass"
 "@
     Set-Content -LiteralPath $Path -Value $content -Encoding UTF8
+}
+
+function Write-BundledSkillConfig {
+    param([string]$PluginDir)
+
+    $skillDir = Join-PathMany @($PluginDir, "skills", $PluginName)
+    if (Test-SkillSource $skillDir) {
+        Write-SkillConfig (Join-Path $skillDir "config.toml")
+    }
+}
+
+function Remove-CodexCachedPluginMcp {
+    $codexHome = Resolve-AbsolutePath (Join-PathMany @((Split-Path -Parent $script:CodexSkillDir), ".."))
+    $cachedPluginDir = Join-PathMany @($codexHome, "plugins", $PluginName)
+    $cachedMcp = Join-Path $cachedPluginDir ".mcp.json"
+    $cachedSkillConfig = Join-PathMany @($cachedPluginDir, "skills", $PluginName, "config.toml")
+
+    if (Test-Path -LiteralPath $cachedMcp -PathType Leaf) {
+        Remove-Item -LiteralPath $cachedMcp -Force
+        Write-Info "REST mode: removed stale Codex cached plugin MCP manifest at $cachedMcp"
+    }
+
+    if (Test-Path -LiteralPath $cachedSkillConfig -PathType Leaf) {
+        Write-SkillConfig $cachedSkillConfig
+        Write-Info "REST mode: updated stale Codex cached plugin skill config at $cachedSkillConfig"
+    }
 }
 
 function Install-GlobalSkill {
@@ -1722,12 +1753,14 @@ try {
         if (Prepare-Destination $script:PluginDir "Codex plugin") {
             Write-Info "Installing Codex plugin from $pluginSource"
             Copy-Directory $pluginSource $script:PluginDir
+            Write-BundledSkillConfig $script:PluginDir
             if ($script:InstallMode -eq "cli") {
                 Write-McpJson (Join-Path $script:PluginDir ".mcp.json")
             }
             else {
                 Remove-Item -LiteralPath (Join-Path $script:PluginDir ".mcp.json") -Force -ErrorAction SilentlyContinue
                 Write-Info "REST mode: removed Codex plugin MCP manifest so the skill uses REST fallback"
+                Remove-CodexCachedPluginMcp
             }
 
             if ($script:WriteGlobalSkill) {

@@ -789,6 +789,7 @@ write_skill_config() {
   local path="$1"
   local escaped_url escaped_user escaped_pass escaped_python escaped_repo_dir escaped_db_path
 
+  mkdir -p "$(dirname "$path")"
   escaped_url="$(toml_escape "$REST_URL")"
   escaped_user="$(toml_escape "$REST_USERNAME")"
   escaped_pass="$(toml_escape "$REST_PASSWORD")"
@@ -813,6 +814,33 @@ url = "$escaped_url"
 username = "$escaped_user"
 password = "$escaped_pass"
 CONFIG
+}
+
+write_bundled_skill_config() {
+  local plugin_dir="$1"
+  local config_path="$plugin_dir/skills/$PLUGIN_NAME/config.toml"
+
+  if [[ -f "$plugin_dir/skills/$PLUGIN_NAME/SKILL.md" ]]; then
+    write_skill_config "$config_path"
+  fi
+}
+
+remove_codex_cached_plugin_mcp() {
+  local codex_home
+  codex_home="$(CDPATH= cd -- "$(dirname -- "$CODEX_SKILL_DIR")/.." && pwd)"
+  local cached_plugin_dir="$codex_home/plugins/$PLUGIN_NAME"
+  local cached_mcp="$cached_plugin_dir/.mcp.json"
+  local cached_skill_config="$cached_plugin_dir/skills/$PLUGIN_NAME/config.toml"
+
+  if [[ -f "$cached_mcp" ]]; then
+    rm -f "$cached_mcp"
+    info "REST mode: removed stale Codex cached plugin MCP manifest at $cached_mcp"
+  fi
+
+  if [[ -f "$cached_skill_config" ]]; then
+    write_skill_config "$cached_skill_config"
+    info "REST mode: updated stale Codex cached plugin skill config at $cached_skill_config"
+  fi
 }
 
 run_cli_init() {
@@ -1602,11 +1630,13 @@ if [[ "$INSTALL_CODEX" == "1" ]]; then
     info "Installing Codex plugin from $SOURCE"
     mkdir -p "$(dirname "$PLUGIN_DIR")"
     cp -R "$SOURCE" "$PLUGIN_DIR"
+    write_bundled_skill_config "$PLUGIN_DIR"
     if [[ "$INSTALL_MODE" == "cli" ]]; then
       write_mcp_config "$PLUGIN_DIR/.mcp.json"
     else
       rm -f "$PLUGIN_DIR/.mcp.json"
       info "REST mode: removed Codex plugin MCP manifest so the skill uses REST fallback"
+      remove_codex_cached_plugin_mcp
     fi
 
     if [[ "$WRITE_GLOBAL_SKILL" == "1" ]]; then
