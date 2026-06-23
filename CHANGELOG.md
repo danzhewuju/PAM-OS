@@ -1,12 +1,22 @@
 # Changelog
 
-## Unreleased
+## v0.3.2
 
 ### Removed
-- Removed the MCP adapter surface, including the `pam-os-mcp` console script, `memory mcp` command, MCP runtime module, plugin manifest registration, and MCP-specific tests.
+- Removed MCP support from the public adapter surface. This includes the `pam-os-mcp` console script, `memory mcp` command, MCP runtime module, bundled `.mcp.json`, plugin manifest tool registration, and MCP-specific tests.
 
 ### Changed
-- Reworked installer and skill guidance around CLI/REST-only execution selected by skill `config.toml`.
+- Bumped the project, runtime, lockfile, and Codex plugin manifest versions to `0.3.2`.
+- Reworked the PAM-OS skill runtime selection so `config.toml` is the source of truth: `mode = "cli"` uses local CLI commands, while `mode = "rest"` calls the configured REST API.
+- Simplified the plugin installers around CLI/REST-only execution and kept legacy cleanup for installer-managed local tool registrations.
+- Updated the Codex plugin manifest to advertise memory/local skill capabilities without registering a tool server.
+
+### Documentation
+- Updated English and Chinese README files, usage docs, plugin docs, skill instructions, and architecture diagrams to describe CLI/REST-only usage.
+- Rewrote the skill usage guide around config-driven CLI and REST flows.
+
+### Tests
+- Removed MCP protocol tests and kept the remaining runtime, REST, configuration, versioning, and installer syntax checks aligned with the CLI/REST-only release.
 
 ## v0.3.1
 
