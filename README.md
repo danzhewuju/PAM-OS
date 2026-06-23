@@ -10,7 +10,7 @@
     <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-blue" /></a>
     <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB" />
     <img alt="SQLite" src="https://img.shields.io/badge/SQLite-local--first-003B57" />
-    <img alt="MCP" src="https://img.shields.io/badge/MCP-ready-6f42c1" />
+    <img alt="CLI" src="https://img.shields.io/badge/CLI-supported-6f42c1" />
     <img alt="REST" src="https://img.shields.io/badge/REST-optional-009688" />
   </p>
   <p>
@@ -26,7 +26,7 @@
 
 ---
 
-PAM-OS gives assistants a durable memory layer they can call before and after a task. It stores raw events, extracts structured memories, retrieves relevant context, consolidates stable profile traits, learns when memory should be used, and returns prompt-ready context packages through CLI, MCP, or REST.
+PAM-OS gives assistants a durable memory layer they can call before and after a task. It stores raw events, extracts structured memories, retrieves relevant context, consolidates stable profile traits, learns when memory should be used, and returns prompt-ready context packages through CLI or REST.
 
 ```text
 Task/Event
@@ -49,13 +49,13 @@ Task/Event
 Most AI tools are stateless unless each client builds its own memory system. PAM-OS is a small runtime that keeps memory outside the model and outside any single chat client.
 
 - **Local-first**: data lives in SQLite at `~/.pam-os/memory.sqlite3` by default.
-- **Agent-ready**: use it from Codex through the packaged plugin, MCP tools, or the skill fallback.
+- **Agent-ready**: use it from Codex through the packaged plugin and skill runtime.
 - **Prompt-ready retrieval**: `prepare` decides whether memory is needed, retrieves memories, applies budgets, and emits context text.
 - **Selective capture**: `capture` stores stable preferences, goals, project decisions, style guidance, and corrections while skipping transient chat.
 - **Profile consolidation**: behavior choices and repeated evidence can be promoted into stable user traits.
 - **Adaptive policy memory**: PAM-OS can learn reusable read/capture signals from interaction patterns instead of relying only on fixed keywords.
 - **Provider pipeline**: policy, retrieval, reranking, extraction, and consolidation are replaceable interfaces with local rule providers as the default fallback.
-- **Protocol-agnostic core**: the same runtime backs CLI, REST API, and MCP.
+- **Protocol-agnostic core**: the same runtime backs CLI and REST API.
 - **No external service required**: the core runtime uses Python and SQLite.
 
 ## Install
@@ -70,9 +70,9 @@ Requirements:
 
 ![image](./docs/diagrams/pam-os.gif)
 
-### Plugin + MCP (Suggest)
+### Plugin + Skill
 
-Use this for Codex, Claude Code, OpenCode, or Hermes integration. The installer maintains a managed PAM-OS checkout at `~/.local/share/pam-os/repo`, installs the selected client integration, and points MCP-capable clients at the same checkout so plugin, skill, and runtime versions stay aligned.
+Use this for Codex, Claude Code, OpenCode, or Hermes integration. The installer maintains a managed PAM-OS checkout at `~/.local/share/pam-os/repo`, installs the selected client integration, and writes a skill `config.toml` that chooses CLI or REST.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-plugin.sh | bash
@@ -153,7 +153,7 @@ Provider interfaces live in `pam_os.providers`:
 - `MemoryReranker`: orders candidates before budgeting.
 - `ProfileConsolidator`: promotes evidence into stable traits.
 
-The default rule implementations live in `pam_os.rule_provider`. Future LLM or embedding providers can plug into the same interfaces without changing CLI, MCP, REST, or the public runtime methods.
+The default rule implementations live in `pam_os.rule_provider`. Future LLM or embedding providers can plug into the same interfaces without changing CLI, REST, or the public runtime methods.
 
 ### Policy Memory Layer
 
@@ -244,7 +244,7 @@ uv run --python 3.12 memory consolidate --recent 100
 uv run --python 3.12 memory profile
 ```
 
-## Multi-Client Plugin and MCP
+## Multi-Client Plugin and Skill
 
 The repository includes a multi-client PAM-OS memory package. The `.codex-plugin`
 directory is only the Codex adapter manifest; Claude Code, OpenCode, and Hermes
@@ -253,7 +253,6 @@ installation use the shared skill and generated client configuration instead.
 ```text
 plugins/pam-os-memory/
   .codex-plugin/plugin.json
-  .mcp.json
   skills/pam-os-memory/SKILL.md
 ```
 
@@ -261,33 +260,12 @@ The recommended integration is:
 
 ```text
 Client adapter
-  |-- MCP or REST configuration  # tool execution
+  |-- pam-os-memory config.toml  # CLI or REST execution
   `-- pam-os-memory skill        # memory usage policy
 ```
 
-Available MCP tools:
-
-- `prepare_context`
-- `capture_memory`
-- `observe_turn`
-- `record_behavior_choice`
-- `consolidate_memory`
-- `get_profile`
-- `search_memory`
-- `inspect_memory`
-- `get_storage_stats`
-
-You can also run the MCP server directly:
-
-```bash
-uv run --python 3.12 pam-os-mcp --db ~/.pam-os/memory.sqlite3
-```
-
-or through the `memory` CLI:
-
-```bash
-uv run --python 3.12 memory --db ~/.pam-os/memory.sqlite3 mcp
-```
+The skill reads `config.toml` before each operation. `mode = "cli"` runs local
+`memory` commands. `mode = "rest"` calls the configured REST API.
 
 ## CLI Reference
 
@@ -306,7 +284,6 @@ memory reflect [--recent 50]
 memory stats
 memory inspect [--table all] [--limit 20] [--query <query>] [--json]
 memory serve [--host 127.0.0.1] [--port 8765]
-memory mcp
 ```
 
 Global options go before the subcommand:
@@ -446,7 +423,6 @@ PAM-OS/
     consolidator.py   # compatibility wrapper for the default profile consolidator
     cli.py            # memory CLI
     api.py            # REST API
-    mcp.py            # MCP stdio server
   plugins/
     pam-os-memory/    # Codex plugin package
   skills/
@@ -480,7 +456,7 @@ PAM-OS is intentionally small today. The current runtime is the executable found
 - optional LLM policy teacher for proposing learned policy signals
 - optional embedding and hybrid retrieval providers
 - better consolidation and contradiction handling through profile consolidator providers
-- broader MCP/client packaging
+- broader client packaging
 - import/export and migration tools
 - stronger diagnostics for memory quality and retrieval behavior
 

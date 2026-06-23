@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+- Removed the MCP adapter surface, including the `pam-os-mcp` console script, `memory mcp` command, MCP runtime module, plugin manifest registration, and MCP-specific tests.
+
+### Changed
+- Reworked installer and skill guidance around CLI/REST-only execution selected by skill `config.toml`.
+
 ## v0.3.1
 
 ### Added

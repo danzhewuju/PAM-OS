@@ -303,10 +303,10 @@ function Configure-RestRuntime {
 function Select-InstallTargets {
     Write-Host ""
     Write-Host "Install targets:"
-    Write-Host "  1) codex     - Codex plugin + MCP + global skill fallback"
-    Write-Host "  2) claude    - Claude Code global skill + MCP"
+    Write-Host "  1) codex     - Codex plugin + global skill fallback"
+    Write-Host "  2) claude    - Claude Code global skill"
     Write-Host "  3) opencode  - OpenCode guidance"
-    Write-Host "  4) hermes    - Hermes MCP config + guidance"
+    Write-Host "  4) hermes    - Hermes skill + guidance"
     Write-Host "  5) all"
     Write-Host ""
     Write-Host "Select one or more targets, separated by commas or spaces."
@@ -361,8 +361,8 @@ function Select-InstallTargets {
 function Select-RuntimeMode {
     Write-Host ""
     Write-Host "Runtime mode:"
-    Write-Host "  1) cli  - register local MCP runtime; CLI fallback remains available"
-    Write-Host "  2) rest - use a running PAM-OS REST server and remove managed local MCP"
+    Write-Host "  1) cli  - use local PAM-OS CLI commands"
+    Write-Host "  2) rest - use a running PAM-OS REST server"
 
     while ($true) {
         $modeChoice = Read-User "Selection [1]"
@@ -431,7 +431,7 @@ Examples:
 Options handled by this wrapper:
   In interactive REST mode, existing installed skill REST settings are offered for reuse.
   --interactive      Do not pass --yes; allow the installer to prompt.
-  --yes              Fully non-interactive legacy default: install codex with CLI mode.
+  --yes              Fully non-interactive default: install codex with CLI mode.
   --non-interactive  Alias for --yes.
   --installer-help   Show scripts\install-plugin.ps1 help.
   -h, --help         Show this help.

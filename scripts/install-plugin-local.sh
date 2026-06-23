@@ -288,10 +288,10 @@ select_install_targets() {
   local selection item valid
 
   ui_printf '\nInstall targets:\n'
-  ui_printf '  1) codex     - Codex plugin + MCP + global skill fallback\n'
-  ui_printf '  2) claude    - Claude Code global skill + MCP\n'
+  ui_printf '  1) codex     - Codex plugin + global skill fallback\n'
+  ui_printf '  2) claude    - Claude Code global skill\n'
   ui_printf '  3) opencode  - OpenCode guidance\n'
-  ui_printf '  4) hermes    - Hermes skill + MCP config + guidance\n'
+  ui_printf '  4) hermes    - Hermes skill + guidance\n'
   ui_printf '  5) all\n'
   ui_printf '\nSelect one or more targets, separated by commas or spaces.\n'
 
@@ -342,8 +342,8 @@ select_runtime_mode() {
   local mode_choice
 
   ui_printf '\nRuntime mode:\n'
-  ui_printf '  1) cli  - register local MCP runtime; CLI fallback remains available\n'
-  ui_printf '  2) rest - use a running PAM-OS REST server and remove managed local MCP\n'
+  ui_printf '  1) cli  - use local PAM-OS CLI commands\n'
+  ui_printf '  2) rest - use a running PAM-OS REST server\n'
 
   while true; do
     if ! read_user mode_choice 'Selection [1]: '; then
@@ -399,7 +399,7 @@ Examples:
 Options handled by this wrapper:
   In interactive REST mode, existing installed skill REST settings are offered for reuse.
   --interactive      Do not pass --yes; allow the installer to prompt.
-  --yes              Fully non-interactive legacy default: install codex with CLI mode.
+  --yes              Fully non-interactive default: install codex with CLI mode.
   --non-interactive  Alias for --yes.
   --installer-help   Show scripts/install-plugin.sh help.
   -h, --help         Show this help.

@@ -19,7 +19,6 @@ dev = ["pytest>=8.0"]
 [project.scripts]
 memory = "pam_os.cli:main"
 pam-memory = "pam_os.cli:main"
-pam-os-mcp = "pam_os.mcp:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

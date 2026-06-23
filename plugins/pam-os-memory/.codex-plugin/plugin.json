@@ -10,22 +10,19 @@
   "keywords": [
     "memory",
     "local-first",
-    "mcp",
     "codex",
     "claude",
     "opencode",
     "hermes"
   ],
   "skills": "./skills/",
-  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "PAM-OS Memory",
     "shortDescription": "Local-first long-term memory for coding agents.",
-    "longDescription": "PAM-OS provides local SQLite-backed memory through skills, MCP tools, REST, and CLI adapters for preparing context before project troubleshooting, analysis, solving, optimization, and implementation work, automatically maintaining stable memories after answers, recording behavior choices, and reading profile traits. This manifest is the Codex adapter for the multi-client PAM-OS memory package.",
+    "longDescription": "PAM-OS provides local SQLite-backed memory through skills, REST, and CLI adapters for preparing context before project troubleshooting, analysis, solving, optimization, and implementation work, automatically maintaining stable memories after answers, recording behavior choices, and reading profile traits. This manifest is the Codex adapter for the multi-client PAM-OS memory package.",
     "developerName": "PAM-OS",
     "category": "Productivity",
     "capabilities": [
-      "Tools",
       "Memory",
       "Local"
     ],

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
   <title id="title">PAM-OS memory architecture</title>
-  <desc id="desc">A diagram showing clients calling PAM-OS through MCP, CLI, or REST, then flowing through adaptive policy, provider pipeline, SQLite storage, and prompt-ready context output.</desc>
+  <desc id="desc">A diagram showing clients calling PAM-OS through CLI or REST, then flowing through adaptive policy, provider pipeline, SQLite storage, and prompt-ready context output.</desc>
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0" stop-color="#f8fafc" />
@@ -53,7 +53,7 @@
         stroke-width: 1.4;
       }
       .client { fill: #ffffff; stroke: #94a3b8; }
-      .mcp { fill: #eaf2ff; stroke: #5283d8; }
+      .adapter { fill: #eaf2ff; stroke: #5283d8; }
       .runtime { fill: #f8fbff; stroke: #6b8fbf; }
       .policy { fill: #fff7ed; stroke: #d08a2d; }
       .provider { fill: #ecfdf5; stroke: #2f9f77; }
@@ -102,7 +102,7 @@
   <rect class="canvas" x="0" y="0" width="1280" height="760" />
 
   <text class="title" x="54" y="64">PAM-OS Memory Architecture</text>
-  <text class="subtitle" x="56" y="91">Local-first memory runtime with adaptive policy, provider pipeline, SQLite storage, and MCP/CLI/REST adapters.</text>
+  <text class="subtitle" x="56" y="91">Local-first memory runtime with adaptive policy, provider pipeline, SQLite storage, and CLI/REST adapters.</text>
 
   <rect class="lane" x="42" y="126" width="192" height="548" rx="14" />
   <text class="lane-title" x="64" y="156">Clients</text>
@@ -131,17 +131,17 @@
   <text class="node-title" x="92" y="548">User Task</text>
   <text class="node-sub" x="84" y="568">before / after answer</text>
 
-  <rect class="node mcp" x="302" y="190" width="134" height="72" rx="10" />
-  <text class="node-title" x="335" y="218">MCP</text>
-  <text class="node-sub" x="324" y="238">preferred tools</text>
+  <rect class="node adapter" x="302" y="190" width="134" height="72" rx="10" />
+  <text class="node-title" x="346" y="218">CLI</text>
+  <text class="node-sub" x="314" y="238">local commands</text>
 
-  <rect class="node mcp" x="302" y="318" width="134" height="72" rx="10" />
+  <rect class="node adapter" x="302" y="318" width="134" height="72" rx="10" />
   <text class="node-title" x="340" y="346">REST</text>
-  <text class="node-sub" x="331" y="366">HTTP fallback</text>
+  <text class="node-sub" x="331" y="366">HTTP API</text>
 
-  <rect class="node mcp" x="302" y="446" width="134" height="72" rx="10" />
-  <text class="node-title" x="346" y="474">CLI</text>
-  <text class="node-sub" x="330" y="494">local fallback</text>
+  <rect class="node adapter" x="302" y="446" width="134" height="72" rx="10" />
+  <text class="node-title" x="335" y="474">Config</text>
+  <text class="node-sub" x="320" y="494">mode selection</text>
 
   <rect class="node runtime" x="532" y="196" width="140" height="82" rx="10" />
   <text class="node-title" x="548" y="225">Runtime API</text>

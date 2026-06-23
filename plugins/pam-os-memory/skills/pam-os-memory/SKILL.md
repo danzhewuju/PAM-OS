@@ -1,25 +1,25 @@
 ---
 name: pam-os-memory
-description: Use PAM-OS as the user's local long-term memory for Codex and coding agents. Trigger when the user asks to continue prior work, refers to preferences, project history, previous decisions, goals, answer style, or asks to remember/capture stable information. Also trigger before project work such as troubleshoot, debug, analyze, solve, optimize, fix, or implement, including Chinese requests like "帮我排查", "帮我分析", "解决一下", and "优化一下这个项目". Treat "pamr" as an explicit read shortcut and "pamw" as an explicit write shortcut. After answering, use it when the turn contains durable preferences, project decisions, workflow choices, corrections, or style guidance. Prefer PAM-OS MCP tools when available; use REST only when configured; use CLI only as a fallback.
+description: Use PAM-OS as the user's local long-term memory for Codex and coding agents. Trigger when the user asks to continue prior work, refers to preferences, project history, previous decisions, goals, answer style, or asks to remember/capture stable information. Also trigger before project work such as troubleshoot, debug, analyze, solve, optimize, fix, or implement, including Chinese requests like "帮我排查", "帮我分析", "解决一下", and "优化一下这个项目". Treat "pamr" as an explicit read shortcut and "pamw" as an explicit write shortcut. After answering, use it when the turn contains durable preferences, project decisions, workflow choices, corrections, or style guidance. Read config.toml first and use either REST or CLI according to mode.
 ---
 
 # PAM-OS Memory
 
-PAM-OS provides local-first memory through SQLite plus MCP, REST, and CLI adapters. Use it as a pre-answer read layer and a post-answer write layer, not as a replacement for normal task reasoning.
+PAM-OS provides local-first memory through SQLite plus REST and CLI adapters. Use it as a pre-answer read layer and a post-answer write layer, not as a replacement for normal task reasoning.
 
 ## Adapter Priority
 
-Use adapters in this order:
+Read `config.toml` from this skill directory before every PAM-OS operation. Use exactly one adapter according to `mode`:
 
-1. MCP tools from the `pam-os-memory` server.
-2. REST API when `config.toml` sets `mode = "rest"` and the local PAM-OS REST server is reachable.
-3. CLI commands when MCP is unavailable and REST is not configured.
+1. `mode = "rest"`: call the configured REST API.
+2. `mode = "cli"`: run CLI commands.
+3. Missing, unreadable, or invalid `mode`: use CLI commands.
 
-Do not use MCP by shelling out manually if the MCP tools are already exposed by the client. Do not start a long-running REST server unless the user asks for server setup. In REST mode, if the API is unreachable, report that the server must be started instead of silently falling back.
+Use only the CLI or REST adapters described here. Do not start any other local tool server. Do not start a long-running REST server unless the user asks for server setup. In REST mode, if the API is unreachable, report that the server must be started instead of silently falling back to CLI.
 
 ## Config Format
 
-Read `config.toml` from this skill directory before REST or CLI fallback. If the config file is missing, unreadable, or does not set a valid mode, use CLI fallback.
+If the config file is missing, unreadable, or does not set a valid mode, use CLI.
 
 Expected `config.toml`:
 
@@ -38,23 +38,7 @@ username = ""
 password = ""
 ```
 
-## MCP Operations
-
-Prefer these tools when available:
-
-- `prepare_context`: read memory before answering history-, preference-, or project-dependent tasks.
-- `capture_memory`: store stable user preferences, goals, project decisions, style guidance, or corrections.
-- `record_behavior_choice`: record choices when the user chooses, rejects, or defers options.
-- `observe_turn`: observe a completed chat turn for conservative automatic memory and policy learning.
-- `consolidate_memory`: promote recent evidence into profile traits after meaningful batches.
-- `get_profile`: read stable user profile traits when profile context is needed.
-- `search_memory`: search stored memories for explicit memory lookup requests.
-- `inspect_memory` and `get_storage_stats`: diagnostics only.
-- `clear_memory`: destructive maintenance only, and only when the user explicitly asks to clear memory.
-
-When a context package is returned, use `package.content` as private working context. Do not paste the whole package to the user unless asked.
-
-## REST Fallback
+## REST Operations
 
 REST endpoint equivalents:
 
