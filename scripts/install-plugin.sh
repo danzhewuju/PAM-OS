@@ -45,7 +45,7 @@ Options:
   --opencode          Install OpenCode guidance and Claude-compatible skill.
   --hermes            Install Hermes skill and guidance.
   --all               Install all supported targets.
-  --mode cli|rest     Set skill runtime mode. Default: cli.
+  --mode cli|rest     Set skill runtime mode. Interactive default: prompt.
   --runtime cli|rest  Alias for --mode.
   --rest-url URL      PAM-OS REST server URL. Default: http://127.0.0.1:8765.
   --rest-username USER
@@ -234,6 +234,32 @@ select_install_targets() {
 
     [[ "$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE$INSTALL_HERMES" != "0000" ]] && return 0
     printf 'Please select at least one valid target.\n'
+  done
+}
+
+select_runtime_mode() {
+  local selection
+
+  printf "\nRuntime mode:\n"
+  printf "  1) cli  - use local PAM-OS CLI commands\n"
+  printf "  2) rest - use a running PAM-OS REST server\n"
+
+  while true; do
+    read_user selection "Selection [1]: " || die "Interactive runtime mode selection requires a TTY. Re-run with --mode cli, --mode rest, or --yes."
+    selection="${selection:-1}"
+    case "$selection" in
+      1|cli|CLI)
+        INSTALL_MODE="cli"
+        return 0
+        ;;
+      2|rest|REST)
+        INSTALL_MODE="rest"
+        return 0
+        ;;
+      *)
+        printf "Please select cli or rest.\n"
+        ;;
+    esac
   done
 }
 
@@ -549,10 +575,6 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -n "$MODE_ARG" ]] || MODE_ARG="cli"
-[[ "$MODE_ARG" == "cli" || "$MODE_ARG" == "rest" ]] || die "--mode must be cli or rest."
-INSTALL_MODE="$MODE_ARG"
-
 if [[ "$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE$INSTALL_HERMES" == "0000" ]]; then
   if [[ "$ASSUME_YES" == "1" ]]; then
     INSTALL_CODEX=1
@@ -560,6 +582,16 @@ if [[ "$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE$INSTALL_HERMES" == "0000" 
     can_prompt || die "Interactive install requires a TTY. Use --yes or choose targets explicitly."
     select_install_targets
   fi
+fi
+
+if [[ -n "$MODE_ARG" ]]; then
+  [[ "$MODE_ARG" == "cli" || "$MODE_ARG" == "rest" ]] || die "--mode must be cli or rest."
+  INSTALL_MODE="$MODE_ARG"
+elif [[ "$ASSUME_YES" == "1" ]]; then
+  INSTALL_MODE="cli"
+else
+  can_prompt || die "Interactive runtime mode selection requires a TTY. Re-run with --mode cli, --mode rest, or --yes."
+  select_runtime_mode
 fi
 
 if [[ "$INSTALL_MODE" == "rest" ]]; then
