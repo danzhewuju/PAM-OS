@@ -101,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             if args.json:
                 print_json(to_plain(prepared))
+            elif args.summary:
+                print_usage_summary(to_plain(prepared.usage_summary))
             elif prepared.package:
                 print(prepared.package.content)
             else:
@@ -232,6 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--limit", type=int)
     prepare.add_argument("--max-chars", type=int)
     prepare.add_argument("--json", action="store_true")
+    prepare.add_argument("--summary", action="store_true", help="Print a user-facing memory usage summary")
 
     capture = subparsers.add_parser("capture", help="Recommended post-answer memory capture entrypoint")
     capture.add_argument("content")
@@ -455,6 +458,28 @@ def format_inspect_meta(table: str, row: dict[str, Any]) -> str:
     else:
         meta = row
     return json.dumps(meta, ensure_ascii=False)
+
+
+def print_usage_summary(summary: dict[str, Any] | None) -> None:
+    if not summary:
+        print("PAM-OS memory usage summary unavailable.")
+        return
+    print(summary.get("message") or "PAM-OS memory usage summary unavailable.")
+    print(f"status: {summary.get('status')}")
+    print(f"reason: {summary.get('reason')}")
+    print(f"confidence: {summary.get('confidence')}")
+    if summary.get("package_id"):
+        print(f"package_id: {summary['package_id']}")
+    print(f"memory_count: {summary.get('memory_count', 0)}")
+    print(f"profile_count: {summary.get('profile_count', 0)}")
+    type_counts = summary.get("memory_type_counts") or {}
+    if type_counts:
+        print(f"memory_type_counts: {json.dumps(type_counts, ensure_ascii=False, sort_keys=True)}")
+    previews = summary.get("previews") or []
+    if previews:
+        print("previews:")
+        for item in previews:
+            print(f"- {item.get('type')} {item.get('id')}: {item.get('content')}")
 
 
 def _json_arg(value: str, *, default: Any) -> Any:

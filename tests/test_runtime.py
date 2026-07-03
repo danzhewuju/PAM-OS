@@ -181,6 +181,28 @@ def test_prepare_context_returns_budgeted_context(tmp_path):
     assert prepared.package is not None
     assert "Personal AI Memory OS" in prepared.package.content
     assert prepared.results
+    assert prepared.usage_summary is not None
+    assert prepared.usage_summary.status == "used"
+    assert prepared.usage_summary.package_id == prepared.package.id
+    assert prepared.usage_summary.memory_count == len(prepared.results)
+    assert prepared.usage_summary.memory_type_counts
+    assert prepared.usage_summary.memory_ids == [result.memory.id for result in prepared.results]
+    assert prepared.usage_summary.previews
+    assert prepared.usage_summary.full_context_available is True
+
+
+def test_prepare_context_usage_summary_reports_skipped_memory(tmp_path):
+    runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
+    runtime.remember("用户偏好 self-host 和本地可控系统。")
+
+    prepared = runtime.prepare_context("Python list 怎么排序？")
+
+    assert prepared.package is None
+    assert prepared.usage_summary is not None
+    assert prepared.usage_summary.status == "skipped"
+    assert prepared.usage_summary.memory_count == 0
+    assert prepared.usage_summary.memory_ids == []
+    assert prepared.usage_summary.full_context_available is False
 
 
 def test_capture_memory_skips_transient_content(tmp_path):
@@ -1207,6 +1229,29 @@ def test_inspect_cli_prints_text_report(tmp_path, capsys):
     assert "PAM-OS Memory Inspect" in captured.out
     assert "memories" in captured.out
     assert "self-host" in captured.out
+
+
+def test_prepare_cli_can_print_usage_summary(tmp_path, capsys):
+    db_path = tmp_path / "memory.sqlite3"
+    runtime = PersonalMemoryRuntime(db_path=db_path)
+    runtime.capture_memory("我决定 Personal AI Memory OS v0.1 先用 SQLite FTS5。", force=True)
+
+    exit_code = main(
+        [
+            "--db",
+            str(db_path),
+            "prepare",
+            "我继续做 Personal AI Memory OS，下一步怎么做？",
+            "--summary",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "PAM-OS read" in captured.out
+    assert "status: used" in captured.out
+    assert "package_id:" in captured.out
+    assert "previews:" in captured.out
 
 
 def test_inspect_cli_can_output_json_and_filter_rows(tmp_path, capsys):

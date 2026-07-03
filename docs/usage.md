@@ -436,9 +436,13 @@ runtime.capture_memory(
 )
 
 prepared = runtime.prepare_context("我继续做 PAM-OS，下一步怎么做？")
+if prepared.usage_summary:
+    print(prepared.usage_summary.message)
 if prepared.package:
     print(prepared.package.content)
 ```
+
+`PreparedContext.usage_summary` 是给界面、日志和调试面板使用的轻量摘要，包含是否使用记忆、命中数量、类型分布、来源 ID、简短预览和可展开完整上下文的标记。真正注入模型的文本仍然是 `prepared.package.content`。
 
 常用方法：
 

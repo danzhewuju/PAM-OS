@@ -5,7 +5,17 @@ from typing import Any
 
 from pam_os.config import OrchestratorConfig
 from pam_os.context import ContextCompiler
-from pam_os.models import CaptureResult, Event, MemoryUseDecision, PreparedContext, QueryIntent, SearchResult, new_id
+from pam_os.models import (
+    CaptureResult,
+    ContextUsageSummary,
+    Event,
+    MemoryPreview,
+    MemoryUseDecision,
+    PreparedContext,
+    QueryIntent,
+    SearchResult,
+    new_id,
+)
 from pam_os.providers import MemoryPolicy, MemoryReranker, MemoryRetriever
 from pam_os.rule_provider import RuleMemoryPolicy, RuleMemoryReranker, RuleQueryIntentClassifier, StoreMemoryRetriever
 from pam_os.store import MemoryStore
@@ -70,7 +80,12 @@ class MemoryOrchestrator:
         if not decision.should_use and intent.should_read:
             decision = MemoryUseDecision(True, intent.reason, intent.confidence, intent.signals)
         if not force and not decision.should_use:
-            return PreparedContext(decision=decision, package=None, results=[])
+            return PreparedContext(
+                decision=decision,
+                package=None,
+                results=[],
+                usage_summary=self._usage_summary(decision, package=None, results=[], profile_count=0),
+            )
 
         profile_traits = self._profile_traits_for(query, intent)
         candidate_limit = max(budget.limit * self.config.candidate_multiplier, budget.limit)
@@ -84,7 +99,17 @@ class MemoryOrchestrator:
         selected = self._apply_budget(ranked, budget)
         package = self.compiler.compile(task, selected, max_chars=budget.max_chars, profile_traits=profile_traits)
         self.store.save_context_package(package)
-        return PreparedContext(decision=decision, package=package, results=selected)
+        return PreparedContext(
+            decision=decision,
+            package=package,
+            results=selected,
+            usage_summary=self._usage_summary(
+                decision,
+                package=package,
+                results=selected,
+                profile_count=len(profile_traits),
+            ),
+        )
 
     def should_capture_memory(self, content: str, metadata: dict[str, Any] | None = None) -> MemoryUseDecision:
         return self.policy.decide_capture(content, metadata)
@@ -215,3 +240,65 @@ class MemoryOrchestrator:
             if len(selected) >= budget.limit:
                 break
         return selected
+
+    def _usage_summary(
+        self,
+        decision: MemoryUseDecision,
+        *,
+        package,
+        results: list[SearchResult],
+        profile_count: int,
+    ) -> ContextUsageSummary:
+        memory_type_counts: dict[str, int] = {}
+        for result in results:
+            memory_type_counts[result.memory.type] = memory_type_counts.get(result.memory.type, 0) + 1
+
+        memory_count = len(results)
+        context_chars = len(package.content) if package else 0
+        status = "used" if package else "skipped"
+        if package:
+            parts = [f"PAM-OS read {memory_count} memories"]
+            if profile_count:
+                parts.append(f"{profile_count} profile traits")
+            if memory_type_counts:
+                type_summary = ", ".join(
+                    f"{memory_type}:{count}" for memory_type, count in sorted(memory_type_counts.items())
+                )
+                parts.append(f"types {type_summary}")
+            message = "; ".join(parts) + "."
+        else:
+            message = f"PAM-OS memory skipped: {decision.reason}."
+
+        previews = [
+            MemoryPreview(
+                id=result.memory.id,
+                type=result.memory.type,
+                content=_preview_text(result.memory.content),
+                score=result.score,
+                importance=result.memory.importance,
+                confidence=result.memory.confidence,
+                tags=result.memory.tags[:8],
+            )
+            for result in results[:5]
+        ]
+        return ContextUsageSummary(
+            status=status,
+            message=message,
+            reason=decision.reason,
+            confidence=decision.confidence,
+            package_id=package.id if package else None,
+            memory_count=memory_count,
+            profile_count=profile_count,
+            memory_type_counts=memory_type_counts,
+            memory_ids=[result.memory.id for result in results],
+            previews=previews,
+            context_chars=context_chars,
+            full_context_available=package is not None,
+        )
+
+
+def _preview_text(value: str, *, max_chars: int = 180) -> str:
+    compact = " ".join(value.split())
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 3].rstrip() + "..."

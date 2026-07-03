@@ -131,6 +131,8 @@ Call `prepare_context` when the user asks about:
 
 Do not read memory for generic one-off factual questions unless the user explicitly requests memory.
 
+When `prepare_context` returns a package, show the user one short memory status line before the substantive answer, using `usage_summary.message` when available. Keep it lightweight, for example: `PAM-OS read 3 memories; types preference:1, project:2.` Do not paste the full injected context unless the user explicitly asks to inspect it. If no package is returned, do not announce memory usage unless the user asked about PAM-OS behavior or debugging.
+
 ## After Answering
 
 When the user writes `pamw`, treat it as an explicit manual write shortcut. Review the current user/assistant conversation, extract concise stable memory candidates, and call `capture_memory` for those candidates. The text after `pamw` is only an optional extraction instruction, not the memory content to save verbatim. If no stable preference, project decision, goal, durable style guidance, correction, or workflow choice is present, say that nothing durable was found instead of writing transient chat.

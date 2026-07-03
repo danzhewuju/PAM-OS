@@ -77,6 +77,33 @@ class ContextPackage:
 
 
 @dataclass(frozen=True)
+class MemoryPreview:
+    id: str
+    type: str
+    content: str
+    score: float
+    importance: float
+    confidence: float
+    tags: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ContextUsageSummary:
+    status: str
+    message: str
+    reason: str
+    confidence: float
+    package_id: str | None = None
+    memory_count: int = 0
+    profile_count: int = 0
+    memory_type_counts: dict[str, int] = field(default_factory=dict)
+    memory_ids: list[str] = field(default_factory=list)
+    previews: list[MemoryPreview] = field(default_factory=list)
+    context_chars: int = 0
+    full_context_available: bool = False
+
+
+@dataclass(frozen=True)
 class MemoryUseDecision:
     should_use: bool
     reason: str
@@ -89,6 +116,7 @@ class PreparedContext:
     decision: MemoryUseDecision
     package: ContextPackage | None
     results: list[SearchResult] = field(default_factory=list)
+    usage_summary: ContextUsageSummary | None = None
 
 
 @dataclass(frozen=True)
