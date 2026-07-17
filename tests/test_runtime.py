@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import json
-
 from pam_os.api import create_app
-from pam_os.cli import main
 from pam_os.config import AppConfig, ConsolidationConfig, ExtractionConfig, LlmProviderConfig, ProvidersConfig, load_config
 from pam_os.llm_extractor import LlmMemoryExtractor
 from pam_os.models import ConsolidationResult, MemoryUseDecision, SearchResult
+from pam_os.quality import evaluate_quality_cases
 from pam_os.runtime import PersonalMemoryRuntime
-from pam_os.version import __version__
 
 
 class AlwaysReadPolicy:
@@ -1172,7 +1169,7 @@ def test_storage_stats_include_table_breakdown(tmp_path):
 
 def test_storage_stats_exposed_by_rest_api(tmp_path):
     app = create_app(db_path=tmp_path / "memory.sqlite3")
-    route = next(route for route in app.routes if getattr(route, "path", None) == "/storage/stats")
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/storage/stats")
     payload = route.endpoint()
 
     assert payload["db_path"].endswith("memory.sqlite3")
@@ -1217,70 +1214,6 @@ def test_inspect_memory_rejects_unknown_table(tmp_path):
         raise AssertionError("expected unknown inspect table to be rejected")
 
 
-def test_inspect_cli_prints_text_report(tmp_path, capsys):
-    db_path = tmp_path / "memory.sqlite3"
-    runtime = PersonalMemoryRuntime(db_path=db_path)
-    runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
-
-    exit_code = main(["--db", str(db_path), "inspect", "--table", "memories", "--limit", "5"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "PAM-OS Memory Inspect" in captured.out
-    assert "memories" in captured.out
-    assert "self-host" in captured.out
-
-
-def test_prepare_cli_can_print_usage_summary(tmp_path, capsys):
-    db_path = tmp_path / "memory.sqlite3"
-    runtime = PersonalMemoryRuntime(db_path=db_path)
-    runtime.capture_memory("我决定 Personal AI Memory OS v0.1 先用 SQLite FTS5。", force=True)
-
-    exit_code = main(
-        [
-            "--db",
-            str(db_path),
-            "prepare",
-            "我继续做 Personal AI Memory OS，下一步怎么做？",
-            "--summary",
-        ]
-    )
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "PAM-OS read" in captured.out
-    assert "status: used" in captured.out
-    assert "package_id:" in captured.out
-    assert "previews:" in captured.out
-
-
-def test_inspect_cli_can_output_json_and_filter_rows(tmp_path, capsys):
-    db_path = tmp_path / "memory.sqlite3"
-    runtime = PersonalMemoryRuntime(db_path=db_path)
-    runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
-    runtime.capture_memory("我喜欢安静、直接的工程化回答。", force=True)
-
-    exit_code = main(
-        [
-            "--db",
-            str(db_path),
-            "inspect",
-            "--table",
-            "memories",
-            "--query",
-            "self-host",
-            "--json",
-        ]
-    )
-
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
-    assert exit_code == 0
-    assert set(payload["details"]) == {"memories"}
-    assert payload["details"]["memories"]
-    assert all("self-host" in row["content"] or "self-host" in row["tags"] for row in payload["details"]["memories"])
-
-
 def test_clear_memory_removes_all_stored_memory_data(tmp_path):
     runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
     runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
@@ -1303,71 +1236,6 @@ def test_clear_memory_removes_all_stored_memory_data(tmp_path):
     assert runtime.search_memory("self-host") == []
 
 
-def test_clear_cli_requires_confirmation(tmp_path, capsys):
-    exit_code = main(["--db", str(tmp_path / "memory.sqlite3"), "clear"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "clear requires --confirm" in captured.err
-
-
-def test_clear_cli_clears_storage(tmp_path, capsys):
-    db_path = tmp_path / "memory.sqlite3"
-    runtime = PersonalMemoryRuntime(db_path=db_path)
-    runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)
-
-    exit_code = main(["--db", str(db_path), "clear", "--confirm"])
-
-    captured = capsys.readouterr()
-    stats = PersonalMemoryRuntime(db_path=db_path).get_storage_stats()
-    assert exit_code == 0
-    assert '"deleted_counts"' in captured.out
-    assert stats.tables["events"]["count"] == 0
-    assert stats.tables["memories"]["count"] == 0
-
-
-def test_observe_turn_cli_outputs_json(tmp_path, capsys):
-    db_path = tmp_path / "memory.sqlite3"
-
-    exit_code = main(
-        [
-            "--db",
-            str(db_path),
-            "observe-turn",
-            "我偏好 PAM-OS 自动写入稳定偏好。",
-            "--assistant-message",
-            "已记录。",
-            "--no-auto-learn-policy",
-        ]
-    )
-
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
-    assert exit_code == 0
-    assert payload["memory_captures"]
-    assert payload["memory_captures"][0]["should_capture"] is True
-    assert payload["policy_outcomes"] == []
-
-
-def test_version_cli_outputs_current_version(capsys):
-    exit_code = main(["version"])
-
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert f"PAM-OS {__version__}" in captured.out
-
-
-def test_update_check_cli_compares_versions_offline(capsys):
-    exit_code = main(["update-check", "--latest-version", "v99.0.0", "--json"])
-
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
-    assert exit_code == 0
-    assert payload["current_version"] == __version__
-    assert payload["latest_version"] == "99.0.0"
-    assert payload["update_available"] is True
-
-
 def test_prepare_and_capture_write_quality_traces(tmp_path):
     runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
 
@@ -1386,20 +1254,8 @@ def test_prepare_and_capture_write_quality_traces(tmp_path):
     assert all(isinstance(trace["metrics"], dict) for trace in traces)
 
 
-def test_quality_eval_default_cases_pass(capsys):
-    exit_code = main(["eval"])
+def test_quality_eval_default_cases_pass():
+    report = evaluate_quality_cases()
 
-    captured = capsys.readouterr()
-    assert exit_code == 0
-    assert "PAM-OS Memory Quality Eval" in captured.out
-    assert "Failed: 0" in captured.out
-
-
-def test_quality_eval_json_output(capsys):
-    exit_code = main(["eval", "--json"])
-
-    captured = capsys.readouterr()
-    payload = json.loads(captured.out)
-    assert exit_code == 0
-    assert payload["failed"] == 0
-    assert payload["by_type"]["capture_policy"]["total"] >= 1
+    assert report["failed"] == 0
+    assert report["by_type"]["capture_policy"]["total"] >= 1

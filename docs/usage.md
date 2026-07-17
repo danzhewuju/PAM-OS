@@ -1,411 +1,293 @@
 # PAM-OS 使用文档
 
-PAM-OS 是一个本地优先的 Personal AI Memory OS MVP。它提供一套轻量的个人记忆运行时，把对话或外部事件保存为原始事件，抽取为结构化记忆，写入 SQLite，再按任务检索并编译成可直接放进模型提示词的上下文。当前同一套运行时同时服务 CLI 和 REST。
+PAM-OS v0.4 将 REST API 设为唯一产品入口。核心 `PersonalMemoryRuntime` 仍保持协议无关，但 AI 客户端、skill、插件和部署都通过 `/v1` HTTP 接口访问，不再提供本地业务命令。
 
-当前版本的主链路是：
+## 1. 架构
 
 ```text
-Task/Event
-  -> Adaptive Memory Policy
-       |-- Learned Policy Signals
-       `-- Rule Policy Fallback
-  -> Provider Pipeline
-       |-- Extraction / Retrieval / Reranking
-       `-- Profile Consolidation
-  -> SQLite Store
-       |-- Events / Memories / Behavior Evidence
-       |-- Profile Traits
-       `-- Policy Signals
-  -> Context Package
+Agent / Skill
+  -> REST API
+     -> 请求校验 / Basic Auth / 错误映射
+     -> PersonalMemoryRuntime
+        -> AdaptiveMemoryPolicy
+        -> Extraction / Retrieval / Reranking
+        -> Profile Consolidation
+        -> Context Compiler
+     -> SQLite (WAL + busy timeout)
 ```
 
-它适合用于：
+核心数据包括：
 
-- 为 AI 助手保存用户偏好、长期目标、项目决策和回答风格。
-- 在回答前自动准备与用户、项目、历史决策相关的记忆上下文。
-- 在回答后捕获稳定信息，而跳过短暂闲聊。
-- 通过行为选择逐步形成更稳定的用户画像。
-- 通过插件 skill、CLI 或 REST API 接入其他工具。
+- `events`：原始对话或外部事件。
+- `memories`：从事件抽取的结构化长期记忆。
+- `behavior_events`：用户的选择、拒绝和延后行为。
+- `profile_traits`：由重复证据巩固出的稳定画像。
+- `policy_signals`：关于何时读写记忆的学习信号。
+- `context_packages`：面向具体任务编译的上下文包。
+- `quality_traces`：策略、抽取、检索和巩固的审计轨迹。
 
-## 1. 环境要求
-
-- Python 3.11 或更高版本。README 示例使用 Python 3.12。
-- 推荐使用 `uv` 运行项目命令。
-- 默认不依赖外部服务。核心功能只使用 Python 标准库和 SQLite。
-- REST API 需要安装 `api` 可选依赖。
-- 开发和测试需要安装 `dev` 可选依赖。
-
-## 2. 快速开始：插件安装
-
-推荐通过插件接入 PAM-OS，这是最主要的使用方式。插件会托管运行仓库并安装 skill。skill 会读取 `config.toml`，然后按 `mode = "cli"` 或 `mode = "rest"` 使用 PAM-OS。
-
-### 2.1 一键安装
+## 2. 启动服务
 
 ```bash
-./scripts/install-plugin.sh --codex --yes
+uv sync
+export PAM_OS_DB="$HOME/.pam-os/memory.sqlite3"
+uv run python -m uvicorn pam_os.api:create_app --factory --host 127.0.0.1 --port 8765
 ```
 
-这个命令会写入：
+Windows PowerShell：
 
-- `~/.local/share/pam-os/repo`：托管运行仓库。
-- `~/plugins/pam-os-memory`：个人 plugin 源目录。
-- `~/.agents/plugins/marketplace.json`：个人 marketplace 入口。
-- `~/.codex/skills/pam-os-memory`：全局 skill fallback。
-- `~/.codex/skills/pam-os-memory/config.toml`：skill runtime 配置，决定使用 CLI 或 REST。
-
-### 2.2 支持的其他客户端
-
-```bash
-./scripts/install-plugin.sh --claude --yes
-./scripts/install-plugin.sh --opencode --yes
-./scripts/install-plugin.sh --hermes --yes
+```powershell
+$env:PAM_OS_DB = "$HOME\.pam-os\memory.sqlite3"
+uv run python -m uvicorn pam_os.api:create_app --factory --host 127.0.0.1 --port 8765
 ```
 
-默认写入：
+服务入口：
 
-- Claude Code：`~/.claude/skills/pam-os-memory`
-- OpenCode：`~/.config/opencode/AGENTS.md`，并复用 Claude-compatible skill
-- Hermes：`~/.hermes/config.yaml` 和 `~/.hermes/AGENTS.md`
+- 存活检查：`GET /health/live`
+- 就绪检查：`GET /v1/health/ready`
+- 版本信息：`GET /v1/meta`
+- OpenAPI：`GET /openapi.json`
+- Swagger UI：`GET /docs`
 
-安装后重启对应客户端即可生效。
+## 3. 服务端配置
 
-### 2.3 仅安装 Skill
-
-```bash
-./scripts/install-skill.sh --codex --yes
-./scripts/install-skill.sh --claude --yes
-./scripts/install-skill.sh --cc-switch --yes
-```
-
-### 2.4 验证接入
-
-先在客户端中让模型记住一条偏好，例如：
-
-```text
-记住：我偏好本地优先、轻量、可控的技术方案。
-```
-
-然后提问：
-
-```text
-按我的偏好，PAM-OS 下一步应该怎么做？
-```
-
-成功接入时，模型应该先准备上下文，读到相关偏好，再基于记忆上下文回答。
-
-也可以通过命令行快速验证底层是否正常：
-
-```bash
-uv run --python 3.12 memory capture "我偏好本地优先、轻量、可控的技术方案。" --force
-uv run --python 3.12 memory search "本地优先"
-```
-
-## 3. 插件架构：Skill + CLI/REST
-
-PAM-OS 接入大模型客户端时，职责拆成两层：
-
-```text
-config.toml = 选择 CLI 或 REST 执行方式
-Skill       = 给模型操作策略：什么时候读记忆、什么时候写记忆、什么不要保存
-```
-
-Skill 负责"会判断"。`mode = "cli"` 时运行本地 `memory` 命令；`mode = "rest"` 时调用 REST API。
-
-### 3.1 主要操作
-
-| 操作 | CLI | REST |
-| --- | --- |
-| 回答前准备上下文 | `memory prepare` | `POST /context/prepare` |
-| 回答后观察轮次 | `memory observe-turn` | `POST /turns/observe` |
-| 捕获稳定记忆 | `memory capture` | `POST /memory/capture` |
-| 记录行为选择 | `memory behavior-choice` | `POST /behavior/choice` |
-| 巩固画像 | `memory consolidate` | `POST /memory/consolidate` |
-| 查看画像 | `memory profile` | `GET /profile` |
-| 搜索记忆 | `memory search` | `GET /memories/search` |
-
-### 3.2 Skill 触发场景
-
-- 用户说"继续之前的项目""按我的偏好""记得我上次说的"等。
-- 用户问题涉及长期目标、项目历史、历史决策、回答风格。
-- 用户明确要求"记住这个"。
-- 用户在多个选项中选择、拒绝或暂缓某些方案。
-
-### 3.3 Runtime 配置
-
-skill 会读取安装目录下的 `config.toml` 选择 runtime：
-
-```text
-Codex:      ~/.codex/skills/pam-os-memory/config.toml
-Claude:     ~/.claude/skills/pam-os-memory/config.toml
-Hermes:     ~/.hermes/skills/pam-os-memory/config.toml
-```
-
-默认是 `mode = "cli"`。如果要后续都走 REST，推荐重新运行安装器并选择 `--mode rest`；它会写入 `mode = "rest"`。
-
-### 3.4 建议给模型的系统提示片段
-
-如果客户端不支持 Skills，可以把下面这段放进系统提示或项目规则中：
-
-```text
-Use PAM-OS as local long-term memory.
-Before answering, call prepare_context when the task depends on user preferences,
-ongoing projects, prior decisions, long-term goals, answer style, or previous
-conversation history. Do not call it for generic one-off factual questions.
-
-After each substantial user-facing answer, call observe_turn with the user
-message and assistant response so PAM-OS can conservatively capture stable
-memory, learn policy, or only write an audit trace. Use capture_memory in
-addition only for explicit remember/import requests or especially clear stable
-facts. Do not capture transient chat or secrets. When the user chooses,
-rejects, or defers options, call record_behavior_choice. Periodically call
-consolidate_memory.
-```
-
-## 4. 配置
-
-复制示例配置：
+复制示例：
 
 ```bash
 cp config/pam-os.example.toml config/pam-os.toml
 ```
 
-配置加载优先级为：
+常用配置：
+
+```toml
+[storage]
+db_path = "~/.pam-os/memory.sqlite3"
+
+[server]
+host = "127.0.0.1"
+port = 8765
+auth_enabled = true
+auth_username = "user"
+auth_password = "change-me"
+
+[context]
+default_limit = 12
+max_chars = 4000
+profile_limit = 8
+```
+
+环境变量会覆盖 TOML：
 
 ```text
-CLI arguments > environment variables > config/pam-os.toml > built-in defaults
+PAM_OS_DB
+PAM_OS_CONFIG
+PAM_OS_HOST
+PAM_OS_PORT
+PAM_OS_AUTH_ENABLED
+PAM_OS_AUTH_USERNAME
+PAM_OS_AUTH_PASSWORD
 ```
 
-常用环境变量：
+## 4. Skill 配置
 
-```bash
-export PAM_OS_DB="/path/to/memory.sqlite3"
-export PAM_OS_CONFIG="/path/to/pam-os.toml"
-export PAM_OS_HOST="0.0.0.0"
-export PAM_OS_PORT="8765"
+安装后的每个客户端 skill 都读取自己的 `config.toml`：
+
+```toml
+[rest]
+url = "http://127.0.0.1:8765"
+username = ""
+password = ""
+timeout_seconds = 10
 ```
 
-主要配置段：
+规则：
 
-| 配置段 | 作用 |
-| --- | --- |
-| `[storage]` | SQLite 数据库路径。 |
-| `[server]` | REST API 的 host 和 port。 |
-| `[context]` | 默认记忆条数、上下文字符预算、画像注入条数。 |
-| `[consolidation]` | 每次巩固扫描多少记忆/行为事件，以及稳定性和置信度增长上限。 |
-| `[orchestrator]` | 是否读取记忆、是否捕获记忆、候选记忆扩展倍数。 |
-| `[retrieval]` | 查询词提取上限。 |
-| `[profile]` | `memory profile` 默认返回画像条数。 |
+- `url` 必须存在。
+- 用户名和密码都非空时发送 Basic Auth。
+- 服务不在 localhost 时必须使用 HTTPS。
+- API 不可达时直接提示启动或配置服务，不回退到本地进程。
+- 写请求默认不自动重试，避免重复事件。
 
-示例配置见 `config/pam-os.example.toml`。
+## 5. 推荐记忆循环
 
-## 5. 核心概念
+### 5.1 回答前：prepare
 
-### 5.1 Raw Event
+当任务依赖用户偏好、项目历史、历史决策、长期目标、回答风格或上下文连续性时调用：
 
-原始事件是进入系统的原始文本。它可以来自手动输入、对话、外部工具或其他集成源。原始事件会永久保存在 `events` 表中。
+```http
+POST /v1/context/prepare
+Content-Type: application/json
 
-### 5.2 Memory
+{
+  "task": "按我的偏好继续设计 PAM-OS",
+  "conversation_summary": null,
+  "force": false,
+  "limit": null,
+  "max_chars": null
+}
+```
 
-记忆是从原始事件中抽取出的结构化信息。当前支持类型：
+返回的 `package.content` 是最终可注入模型的文本。`usage_summary` 用于向用户显示简短的记忆使用状态。
 
-| 类型 | 含义 |
-| --- | --- |
-| `identity` | 用户明确声明的身份信息，例如姓名。 |
-| `preference` | 用户偏好、倾向、喜欢或不喜欢。 |
-| `goal` | 用户目标、计划、下一步。 |
-| `project` | 项目上下文、技术决策、MVP 信息。 |
-| `style` | 回答风格、语气、沟通偏好。 |
-| `episodic` | 最近发生的具体事件。 |
-| `semantic` | 一般事实或知识。 |
+### 5.2 回答后：observe turn
 
-每条记忆包含 `content`、`importance`（0 到 1）、`confidence`（0 到 1）、`tags` 和 `valid_from`/`valid_to`。
+每个 substantial user-facing turn 完成后调用：
 
-### 5.3 Profile Evidence 和 Profile Trait
+```http
+POST /v1/turns/observe
+Content-Type: application/json
 
-PAM-OS 不会把一次事件直接当作永久人格判断。画像层分两步：
+{
+  "user_message": "用户消息",
+  "assistant_message": "助手最终回答",
+  "conversation_summary": null,
+  "source_ref": null,
+  "auto_capture": true,
+  "auto_learn_policy": true
+}
+```
+
+substantial turn 包括分析、排障、实现、规划、决策、偏好、纠正、多步任务和项目上下文。短确认、纯状态更新和没有有效结果的失败轮次可以跳过。
+
+### 5.3 显式写入：capture
+
+用户明确要求“记住”或导入稳定内容时使用：
+
+```http
+POST /v1/memory/capture
+Content-Type: application/json
+
+{
+  "content": "用户偏好本地优先、轻量、可控的设计。",
+  "source": "assistant",
+  "source_ref": null,
+  "metadata": {},
+  "force": true
+}
+```
+
+普通轮次不要用 capture 替代 observe-turn。
+
+## 6. API 参考
+
+### 6.1 事件与检索
+
+```http
+POST /v1/events
+{"content":"raw event","source":"manual","source_ref":null,"metadata":{},"extract":true}
+```
+
+```http
+POST /v1/memories/search
+{"query":"SQLite FTS5","limit":10,"types":["project"],"min_importance":0.0,"min_confidence":0.0}
+```
+
+搜索改为 POST body，避免把可能敏感的查询文本放入 URL 和访问日志。
+
+### 6.2 策略判断
+
+```http
+POST /v1/memory/should-use
+{"task":"继续之前的项目","conversation_summary":null}
+```
+
+### 6.3 行为与画像
+
+```http
+POST /v1/behavior/choice
+{"context":"存储选型","chosen":["SQLite FTS5"],"rejected":["Qdrant"],"deferred":[],"reason":"保持轻量","source_ref":null}
+```
+
+```http
+POST /v1/memory/consolidate
+{"recent":100}
+```
+
+```http
+GET /v1/profile?limit=20&q=技术路线
+```
+
+### 6.4 上下文
+
+```http
+POST /v1/context/compile
+{"task":"继续 PAM-OS","limit":8,"min_importance":0.0,"min_confidence":0.5}
+```
+
+```http
+POST /v1/reflect
+{"recent":50}
+```
+
+### 6.5 诊断与维护
+
+```http
+GET /v1/storage/stats
+GET /v1/memory/inspect?table=quality_traces&limit=20
+```
+
+清空是不可逆操作：
+
+```http
+POST /v1/memory/clear
+{"confirm":true}
+```
+
+skill 只有在用户明确要求清理时才能调用该接口。
+
+## 7. 请求校验与错误
+
+请求模型会：
+
+- 拒绝未知字段。
+- 拒绝 `Content-Length` 超过 1 MB 的请求体。
+- 拒绝空字符串和超长文本。
+- 将分数约束在 `0.0..1.0`。
+- 限制检索、画像和诊断返回条数。
+- 限制巩固和反思窗口。
+
+结构化错误示例：
+
+```json
+{
+  "error": {
+    "code": "validation_error",
+    "message": "Request validation failed",
+    "details": []
+  }
+}
+```
+
+## 8. 安全边界
+
+当前版本是单实例、单用户数据库模型。客户端不能再通过 `user_id` 或 `X-PAM-OS-User` 切换数据库。
+
+原因是旧实现只有文件分片，没有把用户身份绑定到认证主体；任何持有同一 Basic Auth 的客户端都能声明任意用户。这属于数据分区，不是授权隔离。
+
+如果未来需要真正多租户，应实现：
 
 ```text
-Extracted Memories / Behavior Events -> Profile Evidence -> Profile Traits
+credential/token -> authenticated subject -> fixed tenant -> tenant storage
 ```
 
-`ProfileEvidence` 是证据，说明系统为什么相信某个特征。`ProfileTrait` 是更稳定的用户画像。
+在此之前建议一名用户一个 PAM-OS 实例。
 
-### 5.4 Context Package
+## 9. SQLite
 
-上下文包是给模型使用的最终文本。它会按类型分区（User Profile、Long-term Preferences、Active Projects 等），由 `prepare_context` 生成。
+`MemoryStore` 当前使用：
 
-### 5.5 Policy Signal
+- 每次操作独立短连接。
+- `PRAGMA foreign_keys = ON`。
+- 5 秒连接超时和 `busy_timeout`。
+- 初始化时启用 WAL。
+- `synchronous = NORMAL`。
 
-Policy signal 是 PAM-OS 关于"什么时候应该使用记忆"的记忆。存储在 `policy_signals` 表中。`AdaptiveMemoryPolicy` 会先检查已学习的 policy signal，再回退到本地规则 provider。
+事件与本次抽取/去重后的记忆已经在同一事务内提交，避免出现只有 event、没有 memory 的部分写入。质量 trace 仍单独写入；如果未来需要严格的全链路原子性，可以再把 trace 纳入同一工作单元。
 
-正常对话中的自适应学习需要额外的交互层来负责候选生成、准入、确认、强化和审计；设计见 [Adaptive Learning Interaction Design](design/adaptive-learning-interaction-design.md)。
-
-## 6. 推荐工作流
-
-通过插件接入后，模型会自动在合适的时机通过 CLI 或 REST 调用 PAM-OS。以下是推荐的循环：
-
-```text
-用户提问
-  -> 调用 prepare_context
-  -> 把 package.content 加入模型上下文
-  -> 模型回答
-  -> 每个 substantial user-facing turn 后调用 observe_turn 观察完整轮次，自动处理低风险捕获和 policy signal 准入
-  -> 如果用户或回答中出现明确稳定信息，也可调用 capture_memory
-  -> 如果用户做出选择，调用 record_behavior_choice
-  -> 周期性调用 consolidate_memory
-```
-
-**读记忆**（回答前）：当用户问题依赖个人偏好、长期目标、已有项目、历史决策或"继续之前的事"时，Skill 会引导模型调用 `prepare_context`。
-
-**观察轮次**（回答后）：每个 substantial user-facing turn 都调用 `observe_turn` 观察用户消息和模型回答，即使没有明显记忆候选也调用。它会尝试自动捕获低风险稳定记忆，并通过本地准入控制器为明确长期指令或短跟进表达生成 `policy_signals` 候选/active 信号；没有可写内容时也会写入审计 `quality_traces`。substantial turn 包括分析、排障、实现、规划、决策、偏好、纠正、多步任务和项目上下文；很短的确认、纯状态更新、没有有效回答的失败轮次可以跳过。
-
-**写记忆**（回答后）：普通轮次不要用 `capture_memory` 替代 `observe_turn`。当用户明确要求记住/导入，或出现非常清晰的稳定事实时，才额外直接调用 `capture_memory`。跳过"哈哈好的"这类临时闲聊和秘密信息，除非用户明确要求保存。
-
-**记录行为选择**：当用户在多个方案中选择、拒绝或暂缓时，用 `record_behavior_choice` 记录。行为选择会进入 `behavior_events`，随后通过 consolidate 转成画像证据和画像特征。
-
-**定期巩固画像**：定期调用 `consolidate_memory` 将近期记忆和行为事件提升为画像证据和画像特征。查看画像用 `get_profile`。
-
-## 7. CLI 命令参考
-
-插件接入后通常不需要手动使用 CLI。以下命令可作为 CLI 模式和调试参考。
-
-所有命令通过 `memory` 入口运行：
-
-```bash
-uv run --python 3.12 memory <command>
-```
-
-全局参数 `--config` 和 `--db` 需要写在子命令前：
-
-```bash
-uv run --python 3.12 memory --db .pam-os/demo.sqlite3 init
-```
-
-### 7.1 初始化
-
-```bash
-uv run --python 3.12 memory init
-```
-
-### 7.2 写入与搜索
-
-```bash
-# 低层写入（保存原始事件并抽取记忆）
-uv run --python 3.12 memory add "我偏好 self-host 和本地可控系统。"
-
-# 推荐写入（先判断是否值得保存）
-uv run --python 3.12 memory capture "我决定 PAM-OS v0.1 先用 SQLite FTS5。" --force
-
-# 搜索
-uv run --python 3.12 memory search "self-host" --limit 5 --type preference --min-confidence 0.5
-```
-
-### 7.3 准备上下文
-
-```bash
-uv run --python 3.12 memory prepare "按我的偏好设计 PAM-OS 下一步"
-uv run --python 3.12 memory prepare "继续做 PAM-OS" --force --json
-```
-
-### 7.4 行为选择与画像
-
-```bash
-uv run --python 3.12 memory behavior-choice \
-  --context "PAM-OS 技术路线" \
-  --chosen "SQLite FTS5" \
-  --rejected "Qdrant" \
-  --reason "MVP 阶段先保持本地、轻量、可控"
-
-uv run --python 3.12 memory observe-turn "我偏好本地优先、轻量、可控的技术方案。" --assistant-message "收到。"
-uv run --python 3.12 memory consolidate --recent 100
-uv run --python 3.12 memory profile
-uv run --python 3.12 memory profile --query "技术路线"
-```
-
-### 7.5 管理与检查
-
-```bash
-uv run --python 3.12 memory stats                    # 存储概览
-uv run --python 3.12 memory inspect                  # 各表记忆明细
-uv run --python 3.12 memory inspect --table memories --limit 10
-uv run --python 3.12 memory compile "继续做 PAM-OS" --limit 8 --min-confidence 0.5
-uv run --python 3.12 memory reflect --recent 50      # 反思上下文
-uv run --python 3.12 memory clear --confirm          # 清空所有数据（不可逆）
-```
-
-### 7.6 启动 REST 服务
-
-```bash
-uv run --python 3.12 --extra api memory serve --host 127.0.0.1 --port 8765
-```
-
-### 7.7 其他命令
-
-```bash
-uv run --python 3.12 memory should-use "Python list 怎么排序？"  # 判断是否需要读记忆
-uv run --python 3.12 memory compile "继续做 PAM-OS"              # 低层上下文编译
-```
-
-## 8. REST API
-
-REST 模式需要先启动服务：
-
-```bash
-uv run --python 3.12 --extra api memory serve --host 127.0.0.1 --port 8765
-```
-
-健康检查：`GET /health`。启动后 FastAPI 提供交互式文档：`http://127.0.0.1:8765/docs`。
-
-主要接口：
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `GET` | `/health` | 健康检查、数据库路径、FTS 状态。 |
-| `POST` | `/events` | 低层写入事件并抽取记忆。 |
-| `GET` | `/memories/search?q=...&limit=10&type=preference&min_confidence=0.5` | 搜索记忆，支持按类型和分数过滤。 |
-| `GET` | `/memory/should-use?task=...` | 判断当前任务是否应读取记忆。 |
-| `POST` | `/context/prepare` | 推荐的回答前上下文准备。 |
-| `POST` | `/memory/capture` | 推荐的回答后记忆捕获。 |
-| `POST` | `/behavior/choice` | 记录用户行为选择。 |
-| `POST` | `/turns/observe` | 观察一轮对话并执行自动记忆/策略学习。 |
-| `POST` | `/memory/consolidate` | 巩固画像。 |
-| `GET` | `/profile` | 查看画像。 |
-| `GET` | `/memory/inspect?table=all&limit=20&q=...` | 查看各表记忆明细。 |
-| `POST` | `/context/compile` | 低层上下文编译。 |
-| `POST` | `/reflect` | 最近记忆反思上下文。 |
-| `GET` | `/storage/stats` | 查看存储概览。 |
-| `POST` | `/memory/clear` | 清空所有记忆数据（需 `confirm: true`）。 |
-
-REST 模式支持可选的用户作用域。客户端可以在请求体或查询参数中传 `user_id`，也可以发送 `X-PAM-OS-User` header；两者同时存在时，请求体/查询参数优先。未传 `user_id` 时沿用默认数据库。传入 `user_id` 后，PAM-OS 会在同目录下使用独立 SQLite 文件，例如默认库为 `memory.sqlite3`、用户为 `alice` 时会使用 `memory.alice.sqlite3`，从而隔离 memory、profile、policy signal 和 trace。
-
-`user_id` 仅允许字母、数字、`_`、`-`、`.` 和 `@`，并且必须以字母或数字开头。示例：
-
-```bash
-curl -sS -H 'Content-Type: application/json' \
-  -H 'X-PAM-OS-User: alice' \
-  -X POST http://127.0.0.1:8765/memory/capture \
-  -d '{"content":"Alice prefers quiet engineering answers.","force":true}'
-```
-
-### 8.1 Docker 部署
-
-当前仓库提供 `Dockerfile`，镜像默认启动 REST API，监听 `0.0.0.0:8765`，并将 SQLite 数据库放在 `/data/memory.sqlite3`。
+## 10. Docker
 
 ```bash
 docker build -t pam-os .
-```
-
-默认基础镜像使用 DaoCloud 的 Docker Hub 国内镜像。如果需要切换成其他基础镜像源：
-
-```bash
-docker build \
-  --build-arg PYTHON_BASE_IMAGE=python:3.12-slim \
-  --build-arg PIP_INDEX_URL=https://pypi.org/simple \
-  -t pam-os .
-```
-
-```bash
-docker volume create pam-os-data
 docker run -d --name pam-os \
   -p 8765:8765 \
   -v pam-os-data:/data \
@@ -415,221 +297,52 @@ docker run -d --name pam-os \
   pam-os
 ```
 
-远程机器访问时使用服务器地址，并带上 Basic Auth：
+镜像直接运行 `uvicorn pam_os.api:create_app --factory`，健康检查访问 `/health/live`。
+
+## 11. 安装 Agent 集成
 
 ```bash
-curl -u user:change-me http://SERVER_IP:8765/health
+./scripts/install-plugin.sh --codex --yes
+./scripts/install-plugin.sh --claude --yes
+./scripts/install-plugin.sh --opencode --yes
+./scripts/install-plugin.sh --hermes --yes
 ```
 
-## 9. Python API
+本地 checkout：
 
-可以直接在 Python 中使用核心运行时：
+```bash
+./scripts/install-plugin-local.sh
+```
+
+安装器只写 REST 配置。Unix 下配置权限设为 `0600`，Windows 下移除继承 ACL 并仅授予当前用户访问。
+
+## 12. 开发接口
+
+核心运行时仍可在 Python 内部直接使用，以便 API 层测试和 Provider 开发：
 
 ```python
-from pam_os import PersonalMemoryRuntime
+from pam_os.runtime import PersonalMemoryRuntime
 
-runtime = PersonalMemoryRuntime(db_path="~/.pam-os/memory.sqlite3")
-
-runtime.capture_memory(
-    "我决定 PAM-OS v0.1 先用 SQLite FTS5，不引入 Qdrant。",
-    force=True,
-)
-
-prepared = runtime.prepare_context("我继续做 PAM-OS，下一步怎么做？")
-if prepared.usage_summary:
-    print(prepared.usage_summary.message)
-if prepared.package:
-    print(prepared.package.content)
+runtime = PersonalMemoryRuntime()
+prepared = runtime.prepare_context("继续 PAM-OS", force=True)
 ```
 
-`PreparedContext.usage_summary` 是给界面、日志和调试面板使用的轻量摘要，包含是否使用记忆、命中数量、类型分布、来源 ID、简短预览和可展开完整上下文的标记。真正注入模型的文本仍然是 `prepared.package.content`。
+这不是客户端集成方式。外部 Agent 应使用 REST。
 
-常用方法：
+质量评估使用：
 
-| 方法 | 说明 |
-| --- | --- |
-| `init()` | 初始化数据库。 |
-| `remember(content, ...)` | 低层写入原始事件，并可抽取记忆。 |
-| `search_memory(query, ...)` | 搜索记忆。 |
-| `should_use_memory(task, ...)` | 判断回答前是否需要读记忆。 |
-| `prepare_context(task, ...)` | 推荐读路径，返回 `PreparedContext`。 |
-| `capture_memory(content, ...)` | 推荐写路径，返回 `CaptureResult`。 |
-| `observe_turn(user_message, ...)` | 对话后观察入口，返回 `ObservedTurnResult`。 |
-| `record_behavior_choice(...)` | 记录用户行为选择。 |
-| `consolidate_memory(...)` | 巩固画像。 |
-| `get_user_profile(...)` | 读取画像。 |
-| `compile_context(task, ...)` | 低层上下文编译。 |
-| `reflect(recent=50)` | 从近期记忆编译反思上下文。 |
-| `clear_memory()` | 清空所有记忆相关数据。 |
-| `inspect_memory(table="all", limit=20, query=None)` | 查看各表记忆明细和统计。 |
+```python
+from pam_os.quality import evaluate_quality_cases
 
-## 10. 显式 JSON 记忆写入
-
-规则抽取器支持直接输入 JSON 来精确控制类型、重要性、置信度和标签：
-
-```bash
-uv run --python 3.12 memory add '
-[
-  {
-    "type": "preference",
-    "content": "用户偏好 self-host 和本地可控系统。",
-    "importance": 0.9,
-    "confidence": 0.85,
-    "tags": ["self-host", "control"]
-  }
-]'
+report = evaluate_quality_cases()
 ```
 
-支持的 `type` 值：`semantic`、`episodic`、`identity`、`preference`、`goal`、`project`、`style`。
+## 13. 迁移说明
 
-## 11. 数据存储
-
-PAM-OS 使用 SQLite。默认数据库位于 `~/.pam-os/memory.sqlite3`，不同终端和不同项目共用同一份本机记忆库。初始化时创建的表：
-
-| 表 | 说明 |
-| --- | --- |
-| `events` | 原始事件。 |
-| `memories` | 抽取后的结构化记忆。 |
-| `memories_fts` | FTS5 虚拟表。 |
-| `memory_links` | 记忆之间的关系（当前 MVP 预留）。 |
-| `context_packages` | 已生成的上下文包。 |
-| `profile_evidence` | 用户画像证据。 |
-| `profile_traits` | 稳定用户画像。 |
-| `behavior_events` | 用户行为选择事件。 |
-| `policy_signals` | 学习到的读/写/巩固/抑制记忆信号。 |
-
-## 12. 检索和抽取规则
-
-PAM-OS 的默认实现是本地规则版，读写路径通过 provider 接口组织：
-
-- `MemoryPolicy`：判断当前任务是否应该读取或捕获记忆。
-- `MemoryExtractor`：从事件中抽取结构化记忆。
-- `MemoryRetriever`：检索候选记忆。
-- `MemoryReranker`：在预算前重新排序候选结果。
-- `ProfileConsolidator`：把记忆和行为证据提升为稳定画像。
-
-默认 provider 位于 `pam_os.rule_provider`，`AdaptiveMemoryPolicy` 会先检查 `policy_signals`，再回退到规则策略。
-
-当前默认抽取器是 `RuleBasedExtractor`：如果输入是 JSON 则按显式 JSON 抽取，否则按关键字推断记忆类型。检索会合并 SQLite FTS5 与 `LIKE` 查询结果并去重排序；当 FTS5 不可用时仍可通过 `LIKE` 工作。
-
-## 13. 项目结构
-
-```text
-PAM-OS/
-  config/
-    pam-os.example.toml       示例配置
-  eval/
-    cases/                    记忆质量评估用例
-  docs/
-    design/                   设计文档
-    usage.md                  本使用文档
-  src/pam_os/
-    cli.py                    CLI 入口
-    runtime.py                核心运行时门面
-    store.py                  SQLite 存储、检索、画像表操作
-    providers.py              记忆策略、检索、重排、抽取、巩固接口
-    adaptive_policy.py        学习到的 policy signal 与规则 fallback
-    rule_provider.py          默认本地规则 provider
-    extractor.py              规则抽取器
-    orchestrator.py           provider pipeline 协调、预算、重排
-    context.py                上下文编译器
-    consolidator.py           默认画像巩固兼容封装
-    quality.py                记忆质量评估器
-    api.py                    REST API
-    config.py                 配置加载
-    models.py                 数据模型
-  tests/
-    test_runtime.py           端到端运行时测试
-    test_api_auth.py          REST 认证和清空接口测试
-  pyproject.toml              包配置、命令入口、可选依赖
-```
-
-## 14. 开发和测试
-
-```bash
-uv run --python 3.12 --extra dev pytest                    # 运行全部测试
-uv run --python 3.12 --extra dev pytest tests/test_runtime.py  # 运行时测试
-uv run --python 3.12 memory --help                          # 查看 CLI 帮助
-```
-
-## 15. 质量评估与可观测性
-
-PAM-OS 提供一个轻量的记忆质量评估闭环，用于验证读写策略、抽取、检索和画像巩固是否符合预期。默认评估用例位于 `eval/cases/`。
-
-运行默认评估：
-
-```bash
-uv run --python 3.12 memory eval
-```
-
-输出 JSON：
-
-```bash
-uv run --python 3.12 memory eval --json
-```
-
-指定单个用例文件或目录：
-
-```bash
-uv run --python 3.12 memory eval --cases eval/cases/memory_quality_smoke.json
-```
-
-当前支持的评估类型：
-
-| 类型 | 作用 |
-| --- | --- |
-| `read_policy` | 验证任务是否应该读取记忆。 |
-| `capture_policy` | 验证内容是否应该写入长期记忆，以及抽取出的类型和内容。 |
-| `extraction` | 验证原始事件抽取出的 memory type 和内容。 |
-| `retrieval` | 验证查询能否召回目标记忆。 |
-| `consolidation` | 验证记忆和行为证据能否巩固成预期画像。 |
-
-`prepare_context`、`capture_memory`、`observe_turn`、自动 `learn_policy_signal` admission 和 `consolidate_memory` 会写入 `quality_traces` 表，记录 operation、stage、provider、decision、signals、related_ids 和 metrics。可以通过 inspect 查看：
-
-```bash
-uv run --python 3.12 memory inspect --table quality_traces --limit 20
-```
-
-这套机制的目标不是替代单元测试，而是给后续规则调整、LLM provider、embedding retriever 和 reranker 优化提供可回归的质量基线。
-
-## 16. 常见问题
-
-### 16.1 插件安装后不生效
-
-重启对应客户端。检查 skill 文件和 `config.toml` 是否在正确位置。
-
-### 16.2 `prepare_context` 没有返回上下文
-
-该工具会先判断任务是否需要记忆。普通问题可能只返回决策结果。如需强制使用记忆，传入 `force: true`。
-
-### 16.3 `capture_memory` 没有写入
-
-该工具会跳过短暂内容（如"哈哈好的"）。要强制保存，传入 `force: true`。
-
-### 16.4 搜索结果为空
-
-可能原因：数据库路径不对（检查 `PAM_OS_DB` 和配置文件）、之前只保存了事件没抽取记忆、query 词和记忆内容差异太大。
-
-### 16.5 REST 报依赖缺失
-
-REST 需要 `--extra api`：
-
-```bash
-uv run --python 3.12 --extra api memory serve
-```
-
-### 16.6 配置文件没有生效
-
-检查优先级：CLI arguments > environment variables > config/pam-os.toml > built-in defaults。如果设置了 `PAM_OS_DB`，它会覆盖 `[storage].db_path`。
-
-## 17. 当前 MVP 边界
-
-- 抽取器是规则版，不调用 LLM。
-- 画像巩固也是规则版，主要覆盖偏好、回答风格、技术决策风格等有限模式。
-- policy signal 目前通过本地规则和显式学习 API 使用，LLM teacher 仍是后续扩展。
-- 检索是 SQLite FTS5 + LIKE 的本地混合检索，不包含向量数据库。
-- `memory_links` 表已预留，但当前没有复杂图谱逻辑。
-- 上下文预算按字符裁剪，不是精确 token 预算。
-- 原始事件会保存；如需手动遗忘，可通过 `clear` 一次性清空全部记忆数据。
-
-这些边界也是当前版本的设计取舍：先保持本地、轻量、可运行，后续可以在相同接口后面替换为 LLM 抽取器、向量检索或更复杂的画像巩固逻辑。
+- Python 包不再注册 `memory` / `pam-memory` 命令。
+- `src/pam_os/cli.py` 已删除。
+- FastAPI 与 Uvicorn 从可选依赖变为基础依赖。
+- 正式 API 使用 `/v1`。
+- 旧无版本路由暂时保留，但不出现在 OpenAPI 中。
+- skill 配置删除 `mode` 和 `[cli]`。
+- 数据库无需迁移；仍使用原 SQLite schema。

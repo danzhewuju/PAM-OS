@@ -108,25 +108,28 @@ wheels = [
 
 [[package]]
 name = "pam-os"
-version = "0.3.2"
+version = "0.4.0"
 source = { editable = "." }
 
-[package.optional-dependencies]
-api = [
+dependencies = [
     { name = "fastapi" },
+    { name = "pydantic" },
     { name = "uvicorn" },
 ]
+
+[package.optional-dependencies]
 dev = [
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.110" },
+    { name = "fastapi", specifier = ">=0.110" },
+    { name = "pydantic", specifier = ">=2.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "uvicorn", marker = "extra == 'api'", specifier = ">=0.27" },
+    { name = "uvicorn", specifier = ">=0.27" },
 ]
-provides-extras = ["api", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "pluggy"

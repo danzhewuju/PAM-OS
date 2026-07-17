@@ -78,11 +78,10 @@ class PersonalMemoryRuntime:
             content=content.strip(),
             metadata=metadata or {},
         )
-        self.store.add_event(event)
         memories: list[Memory] = []
         if extract:
             memories = self.extractor.extract(event.id, event.content, event.metadata)
-            self.store.add_memories(memories)
+        self.store.add_event_with_memories(event, memories)
         return {"event": event, "memories": memories}
 
     def search_memory(

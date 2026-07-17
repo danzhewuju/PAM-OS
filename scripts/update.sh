@@ -8,7 +8,6 @@ DEFAULT_REF="${PAM_OS_REPO_REF:-latest}"
 REPO_URL="$DEFAULT_REPO_URL"
 REPO_DIR="$DEFAULT_REPO_DIR"
 REF="$DEFAULT_REF"
-INSTALLER="plugin"
 INSTALL_ARGS=(--yes)
 
 info() { printf '[pam-os] %s\n' "$*"; }
@@ -26,8 +25,6 @@ Options:
   --repo-url URL     Git repository URL. Default: https://github.com/danzhewuju/PAM-OS.git
   --repo-dir DIR     Managed checkout directory. Default: ~/.local/share/pam-os/repo
   --ref REF          Git ref to install. Default: latest release tag, falling back to master
-  --plugin           Re-run scripts/install-plugin.sh. Default.
-  --skill            Re-run scripts/install-skill.sh instead of plugin installer.
   --yes              Pass --yes to the installer. Default.
   --help             Show this help.
 
@@ -50,14 +47,6 @@ while [[ $# -gt 0 ]]; do
     --ref)
       REF="${2:-}"
       shift 2
-      ;;
-    --plugin)
-      INSTALLER="plugin"
-      shift
-      ;;
-    --skill)
-      INSTALLER="skill"
-      shift
       ;;
     --yes)
       INSTALL_ARGS=(--yes)
@@ -122,11 +111,7 @@ else
   }
 fi
 
-if [[ "$INSTALLER" == "skill" ]]; then
-  installer_path="$REPO_DIR/scripts/install-skill.sh"
-else
-  installer_path="$REPO_DIR/scripts/install-plugin.sh"
-fi
+installer_path="$REPO_DIR/scripts/install-plugin.sh"
 [[ -f "$installer_path" ]] || die "installer not found: $installer_path"
 
 info "Running installer: $installer_path ${INSTALL_ARGS[*]}"

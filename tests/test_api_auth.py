@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from pam_os.api import create_app
-from pam_os.api import ensure_basic_auth
+from pam_os.api import CaptureRequest, ClearMemoryRequest, SearchRequest, create_app, ensure_basic_auth
 from pam_os.config import AppConfig, ServerConfig
 
 
@@ -39,15 +38,17 @@ def test_rest_api_auth_enabled_requires_credentials():
 def test_rest_post_routes_parse_request_models_from_json_body(tmp_path):
     app = create_app(db_path=tmp_path / "memory.sqlite3")
     post_paths = [
-        "/memory/clear",
-        "/events",
-        "/context/prepare",
-        "/memory/capture",
-        "/behavior/choice",
-        "/turns/observe",
-        "/memory/consolidate",
-        "/context/compile",
-        "/reflect",
+        "/v1/memory/clear",
+        "/v1/events",
+        "/v1/memories/search",
+        "/v1/memory/should-use",
+        "/v1/context/prepare",
+        "/v1/memory/capture",
+        "/v1/behavior/choice",
+        "/v1/turns/observe",
+        "/v1/memory/consolidate",
+        "/v1/context/compile",
+        "/v1/reflect",
     ]
 
     for path in post_paths:
@@ -59,8 +60,8 @@ def test_rest_post_routes_parse_request_models_from_json_body(tmp_path):
 
 def test_clear_memory_rest_api_requires_confirmation(tmp_path):
     app = create_app(db_path=tmp_path / "memory.sqlite3")
-    route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/clear")
-    request = type("ClearRequest", (), {"confirm": False})()
+    route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/clear")
+    request = ClearMemoryRequest(confirm=False)
 
     with pytest.raises(Exception) as exc:
         route.endpoint(request)
@@ -70,20 +71,10 @@ def test_clear_memory_rest_api_requires_confirmation(tmp_path):
 
 def test_clear_memory_rest_api_clears_storage(tmp_path):
     app = create_app(db_path=tmp_path / "memory.sqlite3")
-    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/capture")
-    clear_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/clear")
-    capture_request = type(
-        "CaptureRequest",
-        (),
-        {
-            "content": "我偏好 self-host、开源、可控系统。",
-            "source": "conversation",
-            "source_ref": None,
-            "metadata": {},
-            "force": True,
-        },
-    )()
-    clear_request = type("ClearRequest", (), {"confirm": True})()
+    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/capture")
+    clear_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/clear")
+    capture_request = CaptureRequest(content="我偏好 self-host、开源、可控系统。", force=True)
+    clear_request = ClearMemoryRequest(confirm=True)
 
     capture_route.endpoint(capture_request)
     payload = clear_route.endpoint(clear_request)
@@ -96,19 +87,9 @@ def test_clear_memory_rest_api_clears_storage(tmp_path):
 
 def test_inspect_memory_rest_api_returns_requested_table(tmp_path):
     app = create_app(db_path=tmp_path / "memory.sqlite3")
-    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/capture")
-    inspect_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/inspect")
-    capture_request = type(
-        "CaptureRequest",
-        (),
-        {
-            "content": "我偏好 self-host、开源、可控系统。",
-            "source": "conversation",
-            "source_ref": None,
-            "metadata": {},
-            "force": True,
-        },
-    )()
+    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/capture")
+    inspect_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/inspect")
+    capture_request = CaptureRequest(content="我偏好 self-host、开源、可控系统。", force=True)
 
     capture_route.endpoint(capture_request)
     payload = inspect_route.endpoint(table="memories", limit=10, q="self-host")
@@ -120,7 +101,7 @@ def test_inspect_memory_rest_api_returns_requested_table(tmp_path):
 
 def test_inspect_memory_rest_api_rejects_unknown_table(tmp_path):
     app = create_app(db_path=tmp_path / "memory.sqlite3")
-    inspect_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/inspect")
+    inspect_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/inspect")
 
     with pytest.raises(Exception) as exc:
         inspect_route.endpoint(table="secrets", limit=20, q=None)
@@ -130,104 +111,21 @@ def test_inspect_memory_rest_api_rejects_unknown_table(tmp_path):
 
 def test_search_memory_rest_api_supports_type_and_score_filters(tmp_path):
     app = create_app(db_path=tmp_path / "memory.sqlite3")
-    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/capture")
-    search_route = next(route for route in app.routes if getattr(route, "path", None) == "/memories/search")
-    capture_request = type(
-        "CaptureRequest",
-        (),
-        {
-            "content": "我是 Alex，我喜欢 digital products。",
-            "source": "conversation",
-            "source_ref": None,
-            "metadata": {},
-            "force": True,
-        },
-    )()
+    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/capture")
+    search_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memories/search")
+    capture_request = CaptureRequest(content="我是 Alex，我喜欢 digital products。", force=True)
 
     capture_route.endpoint(capture_request)
-    payload = search_route.endpoint(
-        q="Alex",
-        limit=10,
-        memory_types=["identity"],
-        min_importance=0.0,
-        min_confidence=0.0,
-    )
+    payload = search_route.endpoint(SearchRequest(query="Alex", types=["identity"]))
 
     assert payload
     assert {item["memory"]["type"] for item in payload} == {"identity"}
 
 
-def test_rest_user_id_scopes_memory_and_profile_storage(tmp_path):
-    app = create_app(db_path=tmp_path / "memory.sqlite3")
-    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/memory/capture")
-    search_route = next(route for route in app.routes if getattr(route, "path", None) == "/memories/search")
-    stats_route = next(route for route in app.routes if getattr(route, "path", None) == "/storage/stats")
-    health_route = next(route for route in app.routes if getattr(route, "path", None) == "/health")
+def test_openapi_exposes_only_versioned_product_routes(tmp_path):
+    schema = create_app(db_path=tmp_path / "memory.sqlite3").openapi()
 
-    alice_request = type(
-        "CaptureRequest",
-        (),
-        {
-            "content": "Alice prefers quiet engineering answers.",
-            "source": "conversation",
-            "source_ref": None,
-            "metadata": {},
-            "force": True,
-            "user_id": "alice",
-        },
-    )()
-    bob_request = type(
-        "CaptureRequest",
-        (),
-        {
-            "content": "Bob prefers concise product answers.",
-            "source": "conversation",
-            "source_ref": None,
-            "metadata": {},
-            "force": True,
-            "user_id": "bob",
-        },
-    )()
-
-    alice_capture = capture_route.endpoint(alice_request)
-    capture_route.endpoint(bob_request)
-
-    assert alice_capture["event"]["metadata"]["rest_user_id"] == "alice"
-    assert health_route.endpoint(user_id="alice")["db_path"].endswith("memory.alice.sqlite3")
-
-    alice_results = search_route.endpoint(
-        q="Alice",
-        limit=10,
-        memory_types=None,
-        min_importance=0.0,
-        min_confidence=0.0,
-        user_id="alice",
-    )
-    bob_results = search_route.endpoint(
-        q="Alice",
-        limit=10,
-        memory_types=None,
-        min_importance=0.0,
-        min_confidence=0.0,
-        user_id="bob",
-    )
-
-    alice_stats = stats_route.endpoint(user_id="alice")
-    bob_stats = stats_route.endpoint(user_id="bob")
-
-    assert alice_results
-    assert not bob_results
-    assert alice_stats["user_id"] == "alice"
-    assert bob_stats["user_id"] == "bob"
-    assert alice_stats["tables"]["events"]["count"] == 1
-    assert bob_stats["tables"]["events"]["count"] == 1
-
-
-def test_rest_user_id_rejects_unsafe_values(tmp_path):
-    app = create_app(db_path=tmp_path / "memory.sqlite3")
-    health_route = next(route for route in app.routes if getattr(route, "path", None) == "/health")
-
-    with pytest.raises(Exception) as exc:
-        health_route.endpoint(user_id="../alice")
-
-    assert "400" in str(exc.value)
+    assert "/v1/context/prepare" in schema["paths"]
+    assert "/v1/memory/capture" in schema["paths"]
+    assert "/context/prepare" not in schema["paths"]
+    assert "/memory/capture" not in schema["paths"]

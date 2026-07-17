@@ -87,13 +87,16 @@ class MemoryStore:
         self.init()
 
     def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA synchronous = NORMAL")
         return conn
 
     def init(self) -> None:
         with self.connect() as conn:
+            conn.execute("PRAGMA journal_mode = WAL")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS events (
@@ -229,20 +232,52 @@ class MemoryStore:
 
     def add_event(self, event: Event) -> None:
         with self.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO events(id, source, source_ref, content, metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event.id,
-                    event.source,
-                    event.source_ref,
-                    event.content,
-                    json.dumps(event.metadata, ensure_ascii=False),
-                    event.created_at,
-                ),
-            )
+            self._insert_event(conn, event)
+
+    def add_event_with_memories(self, event: Event, memories: list[Memory]) -> None:
+        with self.connect() as conn:
+            self._insert_event(conn, event)
+            for memory in memories:
+                self._insert_memory(conn, memory)
+
+    def add_event_with_deduped_memories(
+        self,
+        event: Event,
+        memories: list[Memory],
+        *,
+        similarity_threshold: float = 0.82,
+    ) -> tuple[list[Memory], int, int]:
+        resolved: list[Memory] = []
+        created_count = 0
+        updated_count = 0
+        with self.connect() as conn:
+            self._insert_event(conn, event)
+            for memory in memories:
+                existing = self._find_similar_memory(conn, memory, similarity_threshold=similarity_threshold)
+                if existing:
+                    resolved.append(self._reinforce_memory(conn, existing, memory))
+                    updated_count += 1
+                    continue
+                self._insert_memory(conn, memory)
+                resolved.append(memory)
+                created_count += 1
+        return resolved, created_count, updated_count
+
+    def _insert_event(self, conn: sqlite3.Connection, event: Event) -> None:
+        conn.execute(
+            """
+            INSERT INTO events(id, source, source_ref, content, metadata_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.id,
+                event.source,
+                event.source_ref,
+                event.content,
+                json.dumps(event.metadata, ensure_ascii=False),
+                event.created_at,
+            ),
+        )
 
     def add_memories(self, memories: list[Memory]) -> None:
         with self.connect() as conn:

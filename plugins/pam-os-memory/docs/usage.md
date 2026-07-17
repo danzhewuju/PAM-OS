@@ -12,6 +12,6 @@ Install from a PAM-OS checkout:
 
 The installer refreshes the managed PAM-OS repo at `~/.local/share/pam-os/repo`, writes the plugin to `~/plugins/pam-os-memory`, creates or updates `~/.agents/plugins/marketplace.json` with the plugin installed by default, and installs the bundled skill to `~/.codex/skills/pam-os-memory`.
 
-The skill config chooses either CLI mode with the shared database at `~/.pam-os/memory.sqlite3` or REST mode with the configured API URL. For local development, pass `--repo-dir /path/to/PAM-OS` or `--source /path/to/plugins/pam-os-memory` explicitly.
+The skill config contains the PAM-OS REST URL, optional Basic Auth credentials, and request timeout. For local development, pass `--repo-dir /path/to/PAM-OS` or `--source /path/to/plugins/pam-os-memory` explicitly.
 
 After restarting Codex, the global skill fallback lets Codex load the PAM-OS memory policy even if the plugin UI has not refreshed yet. The policy calls `observe_turn` after each substantial user-facing turn so PAM-OS can conservatively capture stable preferences, project decisions, goals, and corrections while skipping transient chat.

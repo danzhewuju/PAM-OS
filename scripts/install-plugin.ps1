@@ -1,7 +1,7 @@
 #requires -Version 5.1
 
 $ErrorActionPreference = "Stop"
-$CliArgs = $args
+$InstallerArgs = $args
 
 function Get-EnvOrDefault {
     param([string]$Name, [string]$Default)
@@ -26,7 +26,6 @@ $HermesHome = Get-EnvOrDefault "HERMES_HOME" (Join-Path $HomeDir ".hermes")
 $DefaultRepoUrl = Get-EnvOrDefault "PAM_OS_REPO_URL" "https://github.com/danzhewuju/PAM-OS.git"
 $DefaultRepoRef = Get-EnvOrDefault "PAM_OS_REPO_REF" "master"
 $DefaultRepoDir = Get-EnvOrDefault "PAM_OS_REPO_DIR" (Join-PathMany @($LocalAppDataDir, "pam-os", "repo"))
-$DefaultDbPath = Get-EnvOrDefault "PAM_OS_DB" (Get-EnvOrDefault "PAM_OS_DB_PATH" (Join-PathMany @($HomeDir, ".pam-os", "memory.sqlite3")))
 $DefaultPluginDir = Join-PathMany @($HomeDir, "plugins", $PluginName)
 $DefaultMarketplacePath = Join-PathMany @($HomeDir, ".agents", "plugins", "marketplace.json")
 $DefaultCodexConfig = Join-Path $CodexHome "config.toml"
@@ -55,15 +54,12 @@ Options:
   --opencode          Install OpenCode guidance and Claude-compatible skill.
   --hermes            Install Hermes skill and guidance.
   --all               Install all supported targets.
-  --mode cli|rest     Set skill runtime mode. Default: cli.
-  --runtime cli|rest  Alias for --mode.
   --rest-url URL      PAM-OS REST server URL. Default: http://127.0.0.1:8765.
   --rest-username USER
                       REST Basic Auth username. Default: empty.
   --rest-password PASS
                       REST Basic Auth password. Default: empty.
-  --db PATH           PAM-OS SQLite database path. Default: $DefaultDbPath.
-  --python VERSION    Python version for CLI mode. Default: 3.12.
+  --rest-timeout SEC  REST request timeout written to skill config. Default: 10.
   --repo-dir DIR      Use an existing PAM-OS checkout. Default: $DefaultRepoDir.
   --repo-url URL      Git repository used to refresh the managed repo.
   --ref REF           Git ref used to refresh the managed repo. Default: master.
@@ -87,8 +83,8 @@ Options:
   --yes               Replace existing installs without prompting.
   -h, --help          Show this help.
 
-PAM-OS now supports only CLI and REST adapters. This installer writes the
-selected skill config and removes legacy local tool registrations it manages.
+PAM-OS uses a REST-only adapter. This installer writes the REST skill config
+and removes legacy local tool registrations it manages.
 "@ | Write-Host
 }
 
@@ -280,23 +276,23 @@ function Write-SkillConfig {
     $parent = Split-Path -Parent $Path
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
     $content = @"
-# PAM-OS skill runtime mode.
-# Supported modes: cli, rest.
-
-mode = "$($script:InstallMode)"
-
-[cli]
-python = "$(ConvertTo-TomlString $script:PythonVersion)"
-command = "memory"
-repo_dir = "$(ConvertTo-TomlString $script:RepoDir)"
-db_path = "$(ConvertTo-TomlString $script:DbPath)"
+# PAM-OS REST client configuration.
 
 [rest]
 url = "$(ConvertTo-TomlString $script:RestUrl)"
 username = "$(ConvertTo-TomlString $script:RestUsername)"
 password = "$(ConvertTo-TomlString $script:RestPassword)"
+timeout_seconds = $($script:RestTimeoutSeconds)
 "@
     Set-Content -LiteralPath $Path -Value $content -Encoding UTF8
+    if ($env:OS -eq "Windows_NT") {
+        $acl = Get-Acl -LiteralPath $Path
+        $acl.SetAccessRuleProtection($true, $false)
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, "FullControl", "Allow")
+        $acl.SetAccessRule($rule)
+        Set-Acl -LiteralPath $Path -AclObject $acl
+    }
 }
 
 function Install-Skill {
@@ -389,7 +385,7 @@ function Update-Guidance {
     }
     $block = @"
 $begin
-Use the installed PAM-OS skill from `$SkillPath`. Read its `config.toml` first and use the configured CLI or REST adapter.
+Use the installed PAM-OS skill from `$SkillPath`. Read its `config.toml` first and call the configured PAM-OS REST API.
 $end
 "@
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
@@ -402,8 +398,6 @@ $script:InstallCodex = $false
 $script:InstallClaude = $false
 $script:InstallOpenCode = $false
 $script:InstallHermes = $false
-$script:InstallMode = ""
-$script:ModeArg = ""
 $script:PluginDir = $DefaultPluginDir
 $script:MarketplacePath = $DefaultMarketplacePath
 $script:CodexConfig = $DefaultCodexConfig
@@ -418,43 +412,39 @@ $script:RepoDir = $DefaultRepoDir
 $script:RepoDirExplicit = $false
 $script:RefreshRepo = $true
 $script:SourceDir = ""
-$script:DbPath = $DefaultDbPath
-$script:PythonVersion = Get-EnvOrDefault "PAM_OS_CLI_PYTHON" "3.12"
 $script:RestUrl = Get-EnvOrDefault "PAM_OS_REST_URL" "http://127.0.0.1:8765"
 $script:RestUsername = Get-EnvOrDefault "PAM_OS_REST_USERNAME" ""
 $script:RestPassword = Get-EnvOrDefault "PAM_OS_REST_PASSWORD" ""
+$script:RestTimeoutSeconds = [int](Get-EnvOrDefault "PAM_OS_REST_TIMEOUT_SECONDS" "10")
 $script:WriteMarketplace = $true
 $script:WriteGlobalSkill = $true
 
-for ($i = 0; $i -lt $CliArgs.Count; $i++) {
-    $arg = $CliArgs[$i]
+for ($i = 0; $i -lt $InstallerArgs.Count; $i++) {
+    $arg = $InstallerArgs[$i]
     switch ($arg) {
-        "--target" { $i++; Enable-Target $CliArgs[$i] }
+        "--target" { $i++; Enable-Target $InstallerArgs[$i] }
         "--codex" { $script:InstallCodex = $true }
         "--claude" { $script:InstallClaude = $true }
         "--opencode" { $script:InstallOpenCode = $true }
         "--hermes" { $script:InstallHermes = $true }
         "--all" { Enable-Target "all" }
-        "--mode" { $i++; $script:ModeArg = $CliArgs[$i] }
-        "--runtime" { $i++; $script:ModeArg = $CliArgs[$i] }
-        "--rest-url" { $i++; $script:RestUrl = $CliArgs[$i] }
-        "--rest-username" { $i++; $script:RestUsername = $CliArgs[$i] }
-        "--rest-user" { $i++; $script:RestUsername = $CliArgs[$i] }
-        "--rest-password" { $i++; $script:RestPassword = $CliArgs[$i] }
-        "--db" { $i++; $script:DbPath = $CliArgs[$i] }
-        "--python" { $i++; $script:PythonVersion = $CliArgs[$i] }
-        "--repo-dir" { $i++; $script:RepoDir = $CliArgs[$i]; $script:RepoDirExplicit = $true; $script:RefreshRepo = $false }
-        "--repo-url" { $i++; $script:RepoUrl = $CliArgs[$i] }
-        "--ref" { $i++; $script:RepoRef = $CliArgs[$i] }
-        "--source" { $i++; $script:SourceDir = $CliArgs[$i] }
-        "--plugin-dir" { $i++; $script:PluginDir = $CliArgs[$i] }
-        "--marketplace" { $i++; $script:MarketplacePath = $CliArgs[$i] }
-        "--codex-config" { $i++; $script:CodexConfig = $CliArgs[$i] }
-        "--codex-skill-dir" { $i++; $script:CodexSkillDir = $CliArgs[$i] }
-        "--claude-skill-dir" { $i++; $script:ClaudeSkillDir = $CliArgs[$i] }
-        "--opencode-agents" { $i++; $script:OpenCodeAgentsFile = $CliArgs[$i] }
-        "--hermes-agents" { $i++; $script:HermesAgentsFile = $CliArgs[$i] }
-        "--hermes-skill-dir" { $i++; $script:HermesSkillDir = $CliArgs[$i] }
+        "--rest-url" { $i++; $script:RestUrl = $InstallerArgs[$i] }
+        "--rest-username" { $i++; $script:RestUsername = $InstallerArgs[$i] }
+        "--rest-user" { $i++; $script:RestUsername = $InstallerArgs[$i] }
+        "--rest-password" { $i++; $script:RestPassword = $InstallerArgs[$i] }
+        "--rest-timeout" { $i++; $script:RestTimeoutSeconds = [int]$InstallerArgs[$i] }
+        "--repo-dir" { $i++; $script:RepoDir = $InstallerArgs[$i]; $script:RepoDirExplicit = $true; $script:RefreshRepo = $false }
+        "--repo-url" { $i++; $script:RepoUrl = $InstallerArgs[$i] }
+        "--ref" { $i++; $script:RepoRef = $InstallerArgs[$i] }
+        "--source" { $i++; $script:SourceDir = $InstallerArgs[$i] }
+        "--plugin-dir" { $i++; $script:PluginDir = $InstallerArgs[$i] }
+        "--marketplace" { $i++; $script:MarketplacePath = $InstallerArgs[$i] }
+        "--codex-config" { $i++; $script:CodexConfig = $InstallerArgs[$i] }
+        "--codex-skill-dir" { $i++; $script:CodexSkillDir = $InstallerArgs[$i] }
+        "--claude-skill-dir" { $i++; $script:ClaudeSkillDir = $InstallerArgs[$i] }
+        "--opencode-agents" { $i++; $script:OpenCodeAgentsFile = $InstallerArgs[$i] }
+        "--hermes-agents" { $i++; $script:HermesAgentsFile = $InstallerArgs[$i] }
+        "--hermes-skill-dir" { $i++; $script:HermesSkillDir = $InstallerArgs[$i] }
         "--skip-marketplace" { $script:WriteMarketplace = $false }
         "--skip-global-skill" { $script:WriteGlobalSkill = $false }
         "--no-refresh" { $script:RefreshRepo = $false }
@@ -470,23 +460,17 @@ for ($i = 0; $i -lt $CliArgs.Count; $i++) {
     }
 }
 
-if ([string]::IsNullOrWhiteSpace($script:ModeArg)) { $script:ModeArg = "cli" }
-if ($script:ModeArg -notin @("cli", "rest")) { Stop-Install "--mode must be cli or rest." }
-$script:InstallMode = $script:ModeArg
-
 if (-not ($script:InstallCodex -or $script:InstallClaude -or $script:InstallOpenCode -or $script:InstallHermes)) {
     if ($script:AssumeYes) { $script:InstallCodex = $true }
     else { Select-InstallTargets }
 }
 
-if ($script:InstallMode -eq "rest") {
-    $script:RestUrl = Prompt-Value "PAM-OS REST URL" $script:RestUrl
-    $script:RestUsername = Prompt-Value "REST username" $script:RestUsername
-    $script:RestPassword = Prompt-Secret "REST password" $script:RestPassword
-    if ([string]::IsNullOrWhiteSpace($script:RestUrl)) { Stop-Install "--rest-url must not be empty when --mode rest is selected." }
-}
+$script:RestUrl = Prompt-Value "PAM-OS REST URL" $script:RestUrl
+$script:RestUsername = Prompt-Value "REST username" $script:RestUsername
+$script:RestPassword = Prompt-Secret "REST password" $script:RestPassword
+if ([string]::IsNullOrWhiteSpace($script:RestUrl)) { Stop-Install "--rest-url must not be empty." }
+if ($script:RestTimeoutSeconds -le 0) { Stop-Install "--rest-timeout must be a positive integer." }
 
-$script:DbPath = Resolve-AbsolutePath $script:DbPath
 $script:PluginDir = Resolve-AbsolutePath $script:PluginDir
 $script:MarketplacePath = Resolve-AbsolutePath $script:MarketplacePath
 $script:CodexConfig = Resolve-AbsolutePath $script:CodexConfig
@@ -549,8 +533,7 @@ if ($script:InstallHermes) {
 Write-Info "Install complete"
 @"
 
-Runtime:
-  mode: $($script:InstallMode)
+REST runtime:
   REST URL: $($script:RestUrl)
 
 Skill paths:
@@ -558,9 +541,9 @@ Skill paths:
   $($script:ClaudeSkillDir)
   $($script:HermesSkillDir)
 
-Managed/runtime repo:
+Installation source repo:
   $($script:RepoDir)
 
-PAM-OS supports CLI and REST adapters only.
+PAM-OS uses the REST adapter only.
 
 "@ | Write-Host

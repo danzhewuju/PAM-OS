@@ -8,7 +8,7 @@
 db_path = "~/.pam-os/memory.sqlite3"
 
 [server]
-# REST API bind address and port used by `memory serve`.
+# REST API bind address and port used by the ASGI server.
 # Environment overrides:
 # - PAM_OS_HOST
 # - PAM_OS_PORT
@@ -77,5 +77,5 @@ api_key_env = "OPENAI_API_KEY"
 timeout_seconds = 8
 
 [profile]
-# Default number of profile traits returned by `memory profile`.
+# Default number of profile traits returned by the profile endpoint.
 default_limit = 20

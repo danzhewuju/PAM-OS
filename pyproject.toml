@@ -4,21 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pam-os"
-version = "0.3.2"
-description = "Personal AI Memory OS MVP: local Personal Memory Runtime with SQLite, CLI, and REST."
+version = "0.4.0"
+description = "Personal AI Memory OS: a REST-only memory runtime backed by SQLite."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "PAM-OS" }]
 license = { file = "LICENSE" }
-dependencies = []
+dependencies = ["fastapi>=0.110", "pydantic>=2.7", "uvicorn>=0.27"]
 
 [project.optional-dependencies]
-api = ["fastapi>=0.110", "uvicorn>=0.27"]
 dev = ["pytest>=8.0"]
-
-[project.scripts]
-memory = "pam_os.cli:main"
-pam-memory = "pam_os.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

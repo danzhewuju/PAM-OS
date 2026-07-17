@@ -92,27 +92,10 @@ Profile traits are ultra-long-term context. They should be concise, explainable,
 
 ## Interfaces
 
-CLI:
-
-```text
-memory consolidate --recent 100
-memory profile list
-memory behavior-choice --context ... --chosen ... --rejected ...
-```
-
-MCP:
-
-```text
-record_behavior_choice
-get_user_profile
-consolidate_memory
-```
-
 REST:
 
 ```text
-POST /behavior/choice
-POST /memory/consolidate
-GET /profile
+POST /v1/behavior/choice
+POST /v1/memory/consolidate
+GET /v1/profile
 ```
-

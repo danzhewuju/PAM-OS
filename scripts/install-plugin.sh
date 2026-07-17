@@ -5,7 +5,6 @@ PLUGIN_NAME="${PAM_OS_PLUGIN_NAME:-pam-os-memory}"
 DEFAULT_REPO_URL="${PAM_OS_REPO_URL:-https://github.com/danzhewuju/PAM-OS.git}"
 DEFAULT_REPO_REF="${PAM_OS_REPO_REF:-master}"
 DEFAULT_REPO_DIR="${PAM_OS_REPO_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/pam-os/repo}"
-DEFAULT_DB_PATH="${PAM_OS_DB:-${PAM_OS_DB_PATH:-$HOME/.pam-os/memory.sqlite3}}"
 DEFAULT_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 DEFAULT_PLUGIN_DIR="$HOME/plugins/$PLUGIN_NAME"
 DEFAULT_MARKETPLACE_PATH="$HOME/.agents/plugins/marketplace.json"
@@ -45,15 +44,12 @@ Options:
   --opencode          Install OpenCode guidance and Claude-compatible skill.
   --hermes            Install Hermes skill and guidance.
   --all               Install all supported targets.
-  --mode cli|rest     Set skill runtime mode. Interactive default: prompt.
-  --runtime cli|rest  Alias for --mode.
   --rest-url URL      PAM-OS REST server URL. Default: http://127.0.0.1:8765.
   --rest-username USER
                       REST Basic Auth username. Default: empty.
   --rest-password PASS
                       REST Basic Auth password. Default: empty.
-  --db PATH           PAM-OS SQLite database path. Default: ~/.pam-os/memory.sqlite3.
-  --python VERSION    Python version for CLI mode. Default: 3.12.
+  --rest-timeout SEC  REST request timeout written to skill config. Default: 10.
   --repo-dir DIR      Use an existing PAM-OS checkout. Default: managed repo.
   --repo-url URL      Git repository used to refresh the managed repo.
   --ref REF           Git ref used to refresh the managed repo. Default: master.
@@ -77,8 +73,8 @@ Options:
   --yes               Replace existing installs without prompting.
   -h, --help          Show this help.
 
-PAM-OS now supports only CLI and REST adapters. This installer writes the
-selected skill config and removes legacy local tool registrations it manages.
+PAM-OS uses a REST-only adapter. This installer writes the REST skill config
+and removes legacy local tool registrations it manages.
 USAGE
 }
 
@@ -237,32 +233,6 @@ select_install_targets() {
   done
 }
 
-select_runtime_mode() {
-  local selection
-
-  printf "\nRuntime mode:\n"
-  printf "  1) cli  - use local PAM-OS CLI commands\n"
-  printf "  2) rest - use a running PAM-OS REST server\n"
-
-  while true; do
-    read_user selection "Selection [1]: " || die "Interactive runtime mode selection requires a TTY. Re-run with --mode cli, --mode rest, or --yes."
-    selection="${selection:-1}"
-    case "$selection" in
-      1|cli|CLI)
-        INSTALL_MODE="cli"
-        return 0
-        ;;
-      2|rest|REST)
-        INSTALL_MODE="rest"
-        return 0
-        ;;
-      *)
-        printf "Please select cli or rest.\n"
-        ;;
-    esac
-  done
-}
-
 abs_path() {
   local path="$1"
   if command -v realpath >/dev/null 2>&1; then
@@ -350,22 +320,15 @@ write_skill_config() {
   local path="$1"
   mkdir -p "$(dirname "$path")"
   cat > "$path" <<EOF
-# PAM-OS skill runtime mode.
-# Supported modes: cli, rest.
-
-mode = "$INSTALL_MODE"
-
-[cli]
-python = "$(toml_escape "$PYTHON_VERSION")"
-command = "memory"
-repo_dir = "$(toml_escape "$REPO_DIR")"
-db_path = "$(toml_escape "$DB_PATH")"
+# PAM-OS REST client configuration.
 
 [rest]
 url = "$(toml_escape "$REST_URL")"
 username = "$(toml_escape "$REST_USERNAME")"
 password = "$(toml_escape "$REST_PASSWORD")"
+timeout_seconds = $REST_TIMEOUT_SECONDS
 EOF
+  chmod 600 "$path"
 }
 
 copy_dir() {
@@ -495,7 +458,7 @@ while begin in existing and end in existing:
     existing = (existing[:start] + existing[finish:]).strip() + "\n"
 
 block = f"""{begin}
-Use the installed PAM-OS skill from `{skill_path}`. Read its `config.toml` first and use the configured CLI or REST adapter.
+Use the installed PAM-OS skill from `{skill_path}`. Read its `config.toml` first and call the configured PAM-OS REST API.
 {end}
 """
 target.write_text(existing.rstrip() + "\n\n" + block if existing.strip() else block, encoding="utf-8")
@@ -513,8 +476,6 @@ INSTALL_CODEX=0
 INSTALL_CLAUDE=0
 INSTALL_OPENCODE=0
 INSTALL_HERMES=0
-INSTALL_MODE=""
-MODE_ARG=""
 PLUGIN_DIR="$DEFAULT_PLUGIN_DIR"
 MARKETPLACE_PATH="$DEFAULT_MARKETPLACE_PATH"
 CODEX_CONFIG="$DEFAULT_CODEX_CONFIG"
@@ -529,11 +490,10 @@ REPO_DIR="$DEFAULT_REPO_DIR"
 REPO_DIR_EXPLICIT=0
 REFRESH_REPO=1
 SOURCE_DIR=""
-DB_PATH="$DEFAULT_DB_PATH"
-PYTHON_VERSION="${PAM_OS_CLI_PYTHON:-3.12}"
 REST_URL="${PAM_OS_REST_URL:-http://127.0.0.1:8765}"
 REST_USERNAME="${PAM_OS_REST_USERNAME:-}"
 REST_PASSWORD="${PAM_OS_REST_PASSWORD:-}"
+REST_TIMEOUT_SECONDS="${PAM_OS_REST_TIMEOUT_SECONDS:-10}"
 WRITE_MARKETPLACE=1
 WRITE_GLOBAL_SKILL=1
 
@@ -545,12 +505,10 @@ while [[ $# -gt 0 ]]; do
     --opencode) INSTALL_OPENCODE=1; shift ;;
     --hermes) INSTALL_HERMES=1; shift ;;
     --all) enable_target all; shift ;;
-    --mode|--runtime) MODE_ARG="${2:-}"; shift 2 ;;
     --rest-url) REST_URL="${2:-}"; shift 2 ;;
     --rest-username|--rest-user) REST_USERNAME="${2:-}"; shift 2 ;;
     --rest-password) REST_PASSWORD="${2:-}"; shift 2 ;;
-    --db) DB_PATH="${2:-}"; shift 2 ;;
-    --python) PYTHON_VERSION="${2:-}"; shift 2 ;;
+    --rest-timeout) REST_TIMEOUT_SECONDS="${2:-}"; shift 2 ;;
     --repo-dir) REPO_DIR="${2:-}"; REPO_DIR_EXPLICIT=1; REFRESH_REPO=0; shift 2 ;;
     --repo-url) REPO_URL="${2:-}"; shift 2 ;;
     --ref) REPO_REF="${2:-}"; shift 2 ;;
@@ -584,20 +542,9 @@ if [[ "$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE$INSTALL_HERMES" == "0000" 
   fi
 fi
 
-if [[ -n "$MODE_ARG" ]]; then
-  [[ "$MODE_ARG" == "cli" || "$MODE_ARG" == "rest" ]] || die "--mode must be cli or rest."
-  INSTALL_MODE="$MODE_ARG"
-elif [[ "$ASSUME_YES" == "1" ]]; then
-  INSTALL_MODE="cli"
-else
-  can_prompt || die "Interactive runtime mode selection requires a TTY. Re-run with --mode cli, --mode rest, or --yes."
-  select_runtime_mode
-fi
-
-if [[ "$INSTALL_MODE" == "rest" ]]; then
-  configure_rest_runtime
-  [[ -n "$REST_URL" ]] || die "--rest-url must not be empty when --mode rest is selected."
-fi
+configure_rest_runtime
+[[ -n "$REST_URL" ]] || die "--rest-url must not be empty."
+[[ "$REST_TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$REST_TIMEOUT_SECONDS" -gt 0 ]] || die "--rest-timeout must be a positive integer."
 
 resolve_repo_dir
 PLUGIN_SOURCE="$(find_plugin_source || true)"
@@ -650,8 +597,7 @@ fi
 info "Install complete"
 cat <<SUMMARY
 
-Runtime:
-  mode: $INSTALL_MODE
+REST runtime:
   REST URL: $REST_URL
 
 Skill paths:
@@ -659,9 +605,9 @@ Skill paths:
   $CLAUDE_SKILL_DIR
   $HERMES_SKILL_DIR
 
-Managed/runtime repo:
+Installation source repo:
   $REPO_DIR
 
-PAM-OS supports CLI and REST adapters only.
+PAM-OS uses the REST adapter only.
 
 SUMMARY

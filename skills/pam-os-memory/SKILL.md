@@ -1,124 +1,119 @@
 ---
 name: pam-os-memory
-description: Use PAM-OS as the user's local long-term memory for AI assistants and coding agents. Trigger when the user asks to continue prior work, refers to personal preferences, project history, previous decisions, long-term goals, answer style, or asks the assistant to remember/capture stable information. Also trigger before project work phrased as "help me troubleshoot/debug/analyze/solve/optimize/fix/implement", including Chinese requests like "帮我排查", "帮我分析", "解决一下", and "优化一下这个项目", because those often depend on prior project context. Treat "pamr" as an explicit read shortcut and "pamw" as an explicit write shortcut that reviews the current user/assistant conversation, extracts stable memory candidates, and writes those candidates to PAM-OS. Also use it after answering when the turn contains stable preferences, project decisions, workflow choices, corrections, or durable style guidance that should be remembered automatically. Read config.toml first and use either REST or CLI according to mode.
+description: Use PAM-OS as the user's REST-backed long-term memory for AI assistants and coding agents. Trigger when the user asks to continue prior work, refers to personal preferences, project history, previous decisions, long-term goals, answer style, or asks the assistant to remember stable information. Also trigger before troubleshooting, debugging, analysis, optimization, fixes, or implementation in a known project. Treat "pamr" as an explicit read shortcut and "pamw" as an explicit write shortcut. After substantial turns, observe the completed turn so PAM-OS can conservatively learn durable memory and policy signals.
 ---
 
 # PAM-OS Memory
 
-PAM-OS provides local-first memory through SQLite plus REST and CLI adapters. Use it as a pre-answer read layer and a post-answer write layer, not as a replacement for normal task reasoning.
+PAM-OS is accessed only through its REST API. Use it as a pre-answer read layer and a post-answer observation layer, not as a replacement for normal task reasoning.
 
-## Adapter Priority
+## Configuration
 
-Read `config.toml` from this skill directory before every PAM-OS operation. Use exactly one adapter according to `mode`:
-
-1. `mode = "rest"`: call the configured REST API.
-2. `mode = "cli"`: run CLI commands.
-3. Missing, unreadable, or invalid `mode`: use CLI commands.
-
-Use only the CLI or REST adapters described here. Do not start any other local tool server. Do not start a long-running REST server unless the user asks for server setup. In REST mode, if the API is unreachable, report that the server must be started instead of silently falling back to CLI.
-
-## Config Format
-
-If the config file is missing, unreadable, or does not set a valid mode, use CLI.
-
-Expected `config.toml`:
+Read `config.toml` from this skill directory before every PAM-OS operation.
 
 ```toml
-mode = "cli"
-
-[cli]
-python = "3.12"
-command = "memory"
-repo_dir = "/absolute/path/to/PAM-OS"
-db_path = "~/.pam-os/memory.sqlite3"
-
 [rest]
 url = "http://127.0.0.1:8765"
 username = ""
 password = ""
+timeout_seconds = 10
 ```
+
+Rules:
+
+- `rest.url` is required. Remove any trailing slash before joining endpoint paths.
+- If both `username` and `password` are non-empty, send HTTP Basic Auth on every protected request.
+- If either credential field is empty, do not send an Authorization header.
+- Use HTTPS whenever the server is not bound to localhost.
+- If the config is missing, invalid, or the API is unreachable, report that PAM-OS REST must be configured or started. Do not fall back to a local command.
+- Use short connect and total timeouts. Do not automatically retry write requests unless the server supports an idempotency key.
 
 ## REST Operations
 
-REST endpoint equivalents:
+- health: `GET /health/live`
+- metadata: `GET /v1/meta`
+- add raw event: `POST /v1/events`
+- search: `POST /v1/memories/search`
+- should use memory: `POST /v1/memory/should-use`
+- prepare: `POST /v1/context/prepare`
+- capture: `POST /v1/memory/capture`
+- behavior choice: `POST /v1/behavior/choice`
+- observe turn: `POST /v1/turns/observe`
+- consolidate: `POST /v1/memory/consolidate`
+- profile: `GET /v1/profile?limit=20&q=...`
+- inspect: `GET /v1/memory/inspect?table=all&limit=20&q=...`
+- stats: `GET /v1/storage/stats`
+- compile: `POST /v1/context/compile`
+- reflect: `POST /v1/reflect`
+- clear memory: `POST /v1/memory/clear` with `confirm=true`; destructive and user-requested only.
 
-- add raw event: `POST /events`
-- search: `GET /memories/search?q=...&limit=10&type=preference`
-- should use memory: `GET /memory/should-use?task=...`
-- prepare: `POST /context/prepare`
-- capture: `POST /memory/capture`
-- behavior choice: `POST /behavior/choice`
-- observe turn: `POST /turns/observe`
-- consolidate: `POST /memory/consolidate`
-- profile: `GET /profile?limit=20&q=...`
-- inspect: `GET /memory/inspect?table=all&limit=20&q=...`
-- stats: `GET /storage/stats`
-- compile: `POST /context/compile`
-- reflect: `POST /reflect`
-- clear memory: `POST /memory/clear` with `confirm=true`; destructive, user-requested maintenance only.
+REST request bodies use the exact JSON field names below. Memory text fields are named `content`, not `text`.
 
-If REST `username` and `password` are non-empty, send HTTP Basic Auth on every REST request. If either value is empty, do not send an Authorization header.
+```http
+POST /v1/memories/search
+{"query":"memory query","limit":10,"types":["project"],"min_importance":0.0,"min_confidence":0.0}
 
-## CLI Fallback
+POST /v1/memory/should-use
+{"task":"current task","conversation_summary":null}
 
-CLI fallback is available but may require shell execution approval. In CLI mode, run commands with `uv --directory "<repo_dir>" run ...` and pass `--db "<db_path>"`.
+POST /v1/context/prepare
+{"task":"current task","conversation_summary":null,"force":false,"limit":null,"max_chars":null}
 
-If `[cli].repo_dir` is empty, first locate the PAM-OS repository that contains `pyproject.toml` and `src/pam_os`, then use that absolute path.
+POST /v1/memory/capture
+{"content":"stable memory candidate","source":"assistant","source_ref":null,"metadata":{},"force":false}
 
-```bash
-uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" search "<query>" --limit 10 --type preference
-uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" should-use "<current task>"
-uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" prepare "<current task>" --json
-uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" capture "<stable information>"
-uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" behavior-choice --context "<decision context>" --chosen "<chosen option>"
-uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" observe-turn "<user message>" --assistant-message "<assistant response>"
-uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" consolidate --recent 100
-uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" profile --limit 20
-uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" inspect --table memories --limit 20 --json
-uv --directory "<repo_dir>" run --python 3.12 memory --db "<db_path>" stats
+POST /v1/events
+{"content":"raw event text","source":"manual","source_ref":null,"metadata":{},"extract":true}
+
+POST /v1/behavior/choice
+{"context":"decision context","chosen":["selected option"],"rejected":[],"deferred":[],"reason":null,"source_ref":null}
+
+POST /v1/turns/observe
+{"user_message":"user text","assistant_message":"assistant text","conversation_summary":null,"source_ref":null,"auto_capture":true,"auto_learn_policy":true}
+
+POST /v1/memory/consolidate
+{"recent":null}
+
+POST /v1/context/compile
+{"task":"current task","limit":null,"min_importance":0.0,"min_confidence":0.0}
+
+POST /v1/reflect
+{"recent":50}
+
+POST /v1/memory/clear
+{"confirm":true}
 ```
 
 ## Before Answering
 
-Call `prepare_context` when the user asks about:
+Call `POST /v1/context/prepare` when the user asks about:
 
-- `pamr ...`, which is an explicit manual read shortcut. Call `prepare_context` with `force=true` and use the text after `pamr` as the task when present.
-- ongoing projects or "continue where we left off"
-- personal preferences, constraints, long-term goals, style, or prior decisions
-- "according to my preference", "use my usual style", "remember what I said", "as we discussed", "as mentioned before", "pick up where we left off", or similar history-dependent phrasing
-- troubleshooting, debugging, analysis, solving, optimization, fixing, or implementation work in a known project or current repository, including requests like "help me debug this repo", "help me analyze this project", "fix the current codebase", "帮我排查一下...", "帮我分析一下...", "解决一下", and "优化一下这个项目"
+- `pamr ...`; set `force=true` and use the text after `pamr` as the task when present.
+- ongoing projects or continuing previous work.
+- personal preferences, constraints, long-term goals, style, or prior decisions.
+- earlier conversation history or phrases such as "as discussed" and "use my usual style".
+- troubleshooting, debugging, analysis, optimization, fixing, or implementation in a known project.
 
 Do not read memory for generic one-off factual questions unless the user explicitly requests memory.
 
-When `prepare_context` returns a package, show the user one short memory status line before the substantive answer, using `usage_summary.message` when available. Keep it lightweight, for example: `PAM-OS read 3 memories; types preference:1, project:2.` Do not paste the full injected context unless the user explicitly asks to inspect it. If no package is returned, do not announce memory usage unless the user asked about PAM-OS behavior or debugging.
+When prepare returns a package, show one short memory status line before the substantive answer using `usage_summary.message` when available. Do not paste the full injected context unless the user asks to inspect it.
 
 ## After Answering
 
-When the user writes `pamw`, treat it as an explicit manual write shortcut. Review the current user/assistant conversation, extract concise stable memory candidates, and call `capture_memory` for those candidates. The text after `pamw` is only an optional extraction instruction, not the memory content to save verbatim. If no stable preference, project decision, goal, durable style guidance, correction, or workflow choice is present, say that nothing durable was found instead of writing transient chat.
+When the user writes `pamw`, review the current conversation, extract concise stable memory candidates, and call `POST /v1/memory/capture`. The text after `pamw` is an extraction instruction, not content to save verbatim.
 
-After each substantial user-facing task, call `observe_turn` with the completed user message and assistant response, even when no obvious memory candidate is present. This is the default post-turn path that lets PAM-OS conservatively decide whether to capture stable memories, learn policy signals, or only write an audit trace. A substantial task is any user-facing turn that involved analysis, troubleshooting, implementation, planning, decisions, preferences, corrections, multi-step work, or project context; skip only brief acknowledgements, purely mechanical status updates, and failed turns with no useful answer.
-
-Use this payload shape for the default observation:
+After each substantial user-facing task, call `POST /v1/turns/observe` with:
 
 ```json
 {"user_message":"user text","assistant_message":"assistant response","conversation_summary":null,"source_ref":null,"auto_capture":true,"auto_learn_policy":true}
 ```
 
-Do not replace `observe_turn` with `capture_memory` for normal turns. Use `capture_memory` in addition only when the user explicitly asks to remember/import something or when a concise stable fact is so clear that direct capture is useful. Capture stable information only:
+Substantial turns include analysis, troubleshooting, implementation, planning, decisions, preferences, corrections, multi-step work, and project context. Skip brief acknowledgements, mechanical status updates, and failed turns with no useful answer.
 
-- preferences: "I prefer self-hosted tools"
-- goals: "My goal is to build..."
-- project decisions: "We decided to use SQLite FTS5", "Do not introduce Qdrant yet"
-- style guidance: "Answer more directly next time", "Default to two options before recommending one"
-- corrections: "That is not my preference", "I do not want that approach"
-- workflow choices: "Use automatic memory capture unless information is ambiguous", "Keep doing this for future debugging tasks"
-
-Skip transient chat, secrets, credentials, medical/legal/financial sensitive details unless the user explicitly asks to store them.
-
-Use `force` only when the user explicitly asks to remember something and the automatic capture gate skips it.
-
-Prefer automatic maintenance over repeated appends: if a similar memory already exists, PAM-OS may reinforce or update it instead of creating a duplicate. For long sessions, send concise candidates such as "用户偏好：PAM-OS 记忆写入应更自动，减少确认打扰。" and let the runtime deduplicate.
+Use direct capture in addition to observe-turn only for explicit remember/import requests or an exceptionally clear stable fact. Store preferences, goals, project decisions, durable style guidance, corrections, and workflow choices. Skip transient chat, secrets, credentials, and sensitive medical, legal, or financial details unless the user explicitly asks to store them.
 
 ## Safety
 
-Keep PAM-OS local by default. Respect `PAM_OS_DB`, `PAM_OS_CONFIG`, and `--db` when present. Never overwrite or delete the user's database unless explicitly instructed.
+- Never call the clear endpoint unless the user explicitly requests destructive memory maintenance.
+- Do not expose credentials, full injected context, or raw memory inspection output without a clear user request.
+- Keep remote PAM-OS deployments behind HTTPS and authentication.

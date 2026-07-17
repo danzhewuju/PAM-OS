@@ -94,24 +94,24 @@
   <text class="node-sub" x="98" y="576">after answer</text>
 
   <rect class="node adapter" x="244" y="184" width="124" height="52" rx="8" />
-  <text class="small-title" x="289" y="207">CLI</text>
-  <text class="small-sub" x="263" y="224">memory command</text>
+  <text class="small-title" x="270" y="207">REST Client</text>
+  <text class="small-sub" x="263" y="224">prepare request</text>
 
   <rect class="node adapter" x="244" y="246" width="124" height="52" rx="8" />
-  <text class="small-title" x="286" y="269">REST</text>
-  <text class="small-sub" x="270" y="286">FastAPI</text>
+  <text class="small-title" x="274" y="269">REST API</text>
+  <text class="small-sub" x="270" y="286">FastAPI /v1</text>
 
   <rect class="node adapter" x="244" y="308" width="124" height="52" rx="8" />
-  <text class="small-title" x="282" y="331">Config</text>
-  <text class="small-sub" x="263" y="348">mode select</text>
+  <text class="small-title" x="266" y="331">REST Config</text>
+  <text class="small-sub" x="268" y="348">URL + auth</text>
 
   <rect class="node adapter" x="244" y="514" width="124" height="52" rx="8" />
-  <text class="small-title" x="289" y="537">CLI</text>
-  <text class="small-sub" x="263" y="554">memory command</text>
+  <text class="small-title" x="270" y="537">REST Client</text>
+  <text class="small-sub" x="261" y="554">observe request</text>
 
   <rect class="node adapter" x="244" y="576" width="124" height="52" rx="8" />
-  <text class="small-title" x="283" y="599">CLI / REST</text>
-  <text class="small-sub" x="261" y="616">configured paths</text>
+  <text class="small-title" x="273" y="599">REST API</text>
+  <text class="small-sub" x="262" y="616">HTTPS + auth</text>
 
   <!-- Runtime column -->
   <rect class="node runtime" x="424" y="208" width="146" height="82" rx="8" />
@@ -264,5 +264,5 @@
   <path class="flow learn-flow" d="M898 762 H936" />
   <text class="legend-text" x="946" y="766">learning feedback</text>
 
-  <text class="subtitle" x="52" y="834">Core modules: runtime.py, orchestrator.py, adaptive_policy.py, rule_provider.py, context.py, store.py, cli.py, api.py</text>
+  <text class="subtitle" x="52" y="834">Core modules: runtime.py, orchestrator.py, adaptive_policy.py, rule_provider.py, context.py, store.py, api.py</text>
 </svg>

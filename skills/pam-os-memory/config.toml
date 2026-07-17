@@ -1,15 +1,7 @@
-# PAM-OS skill runtime mode.
-# Default is CLI. Change mode to "rest" when the REST server is running.
-
-mode = "cli"
-
-[cli]
-python = "3.12"
-command = "memory"
-repo_dir = ""
-db_path = "~/.pam-os/memory.sqlite3"
+# PAM-OS REST client configuration.
 
 [rest]
 url = "http://127.0.0.1:8765"
 username = ""
 password = ""
+timeout_seconds = 10

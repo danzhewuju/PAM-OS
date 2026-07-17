@@ -150,9 +150,8 @@ class MemoryOrchestrator:
                     content=content.strip(),
                     metadata=capture_metadata,
                 )
-                self.store.add_event(event)
                 candidates = extractor.extract(event.id, event.content, event.metadata)
-                memories, created_count, updated_count = self.store.upsert_deduped_memories(candidates)
+                memories, created_count, updated_count = self.store.add_event_with_deduped_memories(event, candidates)
                 reason = result_reason
                 if updated_count and not created_count:
                     reason = f"{reason}; reinforced existing memory"

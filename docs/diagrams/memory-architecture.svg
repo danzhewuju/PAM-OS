@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" role="img" aria-labelledby="title desc">
   <title id="title">PAM-OS memory architecture</title>
-  <desc id="desc">A diagram showing clients calling PAM-OS through CLI or REST, then flowing through adaptive policy, provider pipeline, SQLite storage, and prompt-ready context output.</desc>
+  <desc id="desc">A diagram showing clients calling PAM-OS through its REST API, then flowing through adaptive policy, provider pipeline, SQLite storage, and prompt-ready context output.</desc>
   <defs>
     <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
       <stop offset="0" stop-color="#f8fafc" />
@@ -102,13 +102,13 @@
   <rect class="canvas" x="0" y="0" width="1280" height="760" />
 
   <text class="title" x="54" y="64">PAM-OS Memory Architecture</text>
-  <text class="subtitle" x="56" y="91">Local-first memory runtime with adaptive policy, provider pipeline, SQLite storage, and CLI/REST adapters.</text>
+  <text class="subtitle" x="56" y="91">Local-first memory runtime with adaptive policy, SQLite storage, and a versioned REST boundary.</text>
 
   <rect class="lane" x="42" y="126" width="192" height="548" rx="14" />
   <text class="lane-title" x="64" y="156">Clients</text>
 
   <rect class="lane" x="274" y="126" width="190" height="548" rx="14" />
-  <text class="lane-title" x="296" y="156">Adapters</text>
+  <text class="lane-title" x="296" y="156">REST Boundary</text>
 
   <rect class="lane" x="504" y="126" width="196" height="548" rx="14" />
   <text class="lane-title" x="526" y="156">Runtime</text>
@@ -132,16 +132,16 @@
   <text class="node-sub" x="84" y="568">before / after answer</text>
 
   <rect class="node adapter" x="302" y="190" width="134" height="72" rx="10" />
-  <text class="node-title" x="346" y="218">CLI</text>
-  <text class="node-sub" x="314" y="238">local commands</text>
+  <text class="node-title" x="326" y="218">Agent Skill</text>
+  <text class="node-sub" x="318" y="238">request policy</text>
 
   <rect class="node adapter" x="302" y="318" width="134" height="72" rx="10" />
-  <text class="node-title" x="340" y="346">REST</text>
-  <text class="node-sub" x="331" y="366">HTTP API</text>
+  <text class="node-title" x="330" y="346">REST API</text>
+  <text class="node-sub" x="332" y="366">HTTP /v1</text>
 
   <rect class="node adapter" x="302" y="446" width="134" height="72" rx="10" />
-  <text class="node-title" x="335" y="474">Config</text>
-  <text class="node-sub" x="320" y="494">mode selection</text>
+  <text class="node-title" x="320" y="474">Client Config</text>
+  <text class="node-sub" x="325" y="494">URL + auth</text>
 
   <rect class="node runtime" x="532" y="196" width="140" height="82" rx="10" />
   <text class="node-title" x="548" y="225">Runtime API</text>
