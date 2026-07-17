@@ -120,7 +120,7 @@ Windows PowerShell:
 .\scripts\install-plugin-local.ps1
 ```
 
-The installer writes REST credentials with restrictive file permissions where supported. For remote servers, use HTTPS and avoid passing passwords in shell history.
+The installer reuses an existing installed skill's REST URL, username, password, and timeout as defaults. Interactive installs show the previous URL and username, report whether a password is configured without revealing it, and let you press Enter to keep the existing values. Explicit command-line options and `PAM_OS_REST_*` environment variables take precedence. REST credentials are written with restrictive file permissions where supported. For remote servers, use HTTPS and avoid passing passwords in shell history.
 
 ## REST API
 

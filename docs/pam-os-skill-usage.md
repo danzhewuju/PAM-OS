@@ -20,7 +20,7 @@ Windows：
 .\scripts\install-plugin-local.ps1
 ```
 
-支持 Codex、Claude Code、OpenCode 和 Hermes。安装器会复制 skill、写入 REST 配置，并清理它管理过的旧本地工具注册。
+支持 Codex、Claude Code、OpenCode 和 Hermes。安装器会复制 skill、写入 REST 配置，并清理它管理过的旧本地工具注册。重装时会读取已有 skill 配置并默认沿用 URL、用户名、密码和超时；密码只显示配置状态，不会明文回显。
 
 ## 配置
 

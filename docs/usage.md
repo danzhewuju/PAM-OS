@@ -314,7 +314,7 @@ docker run -d --name pam-os \
 ./scripts/install-plugin-local.sh
 ```
 
-安装器只写 REST 配置。Unix 下配置权限设为 `0600`，Windows 下移除继承 ACL 并仅授予当前用户访问。
+安装器只写 REST 配置。重装或升级时会先读取已有 skill 配置，把 URL、用户名、密码和超时作为默认值；交互模式不会明文回显旧密码。命令行参数和 `PAM_OS_REST_*` 环境变量优先于已有配置。Unix 下配置权限设为 `0600`，Windows 下移除继承 ACL 并仅授予当前用户访问。
 
 ## 12. 开发接口
 

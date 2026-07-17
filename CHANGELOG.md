@@ -20,6 +20,7 @@
 - Made FastAPI and Uvicorn required package dependencies and changed Docker to launch the ASGI factory directly.
 - Reworked PAM-OS as a personal single-database REST service. Unversioned v0.3 routes remain as hidden compatibility aliases for a migration window.
 - Rewrote the packaged skill, installers, README files, and usage documentation around REST-only operation.
+- Changed the REST-only installers to discover and reuse existing skill REST settings by default while keeping explicit options and environment variables authoritative.
 - Bumped project, runtime, lockfile, and plugin versions to `0.4.0`.
 
 ## v0.3.2

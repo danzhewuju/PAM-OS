@@ -54,12 +54,12 @@ Options:
   --opencode          Install OpenCode guidance and Claude-compatible skill.
   --hermes            Install Hermes skill and guidance.
   --all               Install all supported targets.
-  --rest-url URL      PAM-OS REST server URL. Default: http://127.0.0.1:8765.
+  --rest-url URL      PAM-OS REST server URL. Default: existing config, otherwise http://127.0.0.1:8765.
   --rest-username USER
-                      REST Basic Auth username. Default: empty.
+                      REST Basic Auth username. Default: existing config, otherwise empty.
   --rest-password PASS
-                      REST Basic Auth password. Default: empty.
-  --rest-timeout SEC  REST request timeout written to skill config. Default: 10.
+                      REST Basic Auth password. Default: existing config, otherwise empty.
+  --rest-timeout SEC  REST request timeout. Default: existing config, otherwise 10.
   --repo-dir DIR      Use an existing PAM-OS checkout. Default: $DefaultRepoDir.
   --repo-url URL      Git repository used to refresh the managed repo.
   --ref REF           Git ref used to refresh the managed repo. Default: master.
@@ -126,7 +126,13 @@ function Prompt-Value {
 function Prompt-Secret {
     param([string]$Prompt, [string]$Default)
     if ($script:AssumeYes) { return $Default }
-    $secure = Read-Host "$Prompt (leave empty for none)" -AsSecureString
+    $promptText = if ([string]::IsNullOrEmpty($Default)) {
+        "$Prompt (leave empty for none)"
+    }
+    else {
+        "$Prompt (configured; press Enter to keep, or type a replacement)"
+    }
+    $secure = Read-Host $promptText -AsSecureString
     if ($secure.Length -eq 0) { return $Default }
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
@@ -143,6 +149,96 @@ function ConvertTo-TomlString {
     param([string]$Value)
     if ($null -eq $Value) { $Value = "" }
     return ($Value -replace "\\", "\\" -replace '"', '\"')
+}
+
+function ConvertFrom-TomlString {
+    param([string]$Value)
+    if ($null -eq $Value) { return "" }
+    return $Value.Replace('\"', '"').Replace('\\', '\')
+}
+
+function Read-RestConfig {
+    param([string]$Path)
+
+    $result = [ordered]@{
+        Path = $Path
+        HasUrl = $false
+        Url = ""
+        HasUsername = $false
+        Username = ""
+        HasPassword = $false
+        Password = ""
+        HasTimeout = $false
+        TimeoutSeconds = 0
+    }
+    $section = ""
+    foreach ($line in Get-Content -LiteralPath $Path -Encoding UTF8) {
+        if ($line -match '^\s*\[([^]]+)\]\s*$') {
+            $section = $Matches[1]
+            continue
+        }
+        if ($section -ne "rest") { continue }
+        if ($line -match '^\s*(url|username|password)\s*=\s*"(.*)"\s*$') {
+            $value = ConvertFrom-TomlString $Matches[2]
+            switch ($Matches[1]) {
+                "url" { $result.HasUrl = $true; $result.Url = $value }
+                "username" { $result.HasUsername = $true; $result.Username = $value }
+                "password" { $result.HasPassword = $true; $result.Password = $value }
+            }
+            continue
+        }
+        if ($line -match '^\s*timeout_seconds\s*=\s*([0-9]+)\s*$') {
+            $result.HasTimeout = $true
+            $result.TimeoutSeconds = [int]$Matches[1]
+        }
+    }
+    if (-not ($result.HasUrl -or $result.HasUsername -or $result.HasPassword -or $result.HasTimeout)) { return $null }
+    return [pscustomobject]$result
+}
+
+function Import-ExistingRestConfig {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if ($script:InstallCodex) {
+        $candidates.Add((Join-Path $script:CodexSkillDir "config.toml"))
+        $candidates.Add((Join-PathMany @($script:PluginDir, "skills", $PluginName, "config.toml")))
+    }
+    if ($script:InstallClaude -or $script:InstallOpenCode) {
+        $candidates.Add((Join-Path $script:ClaudeSkillDir "config.toml"))
+    }
+    if ($script:InstallHermes) {
+        $candidates.Add((Join-Path $script:HermesSkillDir "config.toml"))
+    }
+    $candidates.Add((Join-Path $script:CodexSkillDir "config.toml"))
+    $candidates.Add((Join-PathMany @($script:PluginDir, "skills", $PluginName, "config.toml")))
+    $candidates.Add((Join-Path $script:ClaudeSkillDir "config.toml"))
+    $candidates.Add((Join-Path $script:HermesSkillDir "config.toml"))
+
+    foreach ($candidate in $candidates) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        $config = Read-RestConfig $candidate
+        if ($null -eq $config) { continue }
+
+        $script:ExistingRestConfig = $candidate
+        if (-not $script:RestUrlExplicit -and $config.HasUrl) {
+            $script:RestUrl = $config.Url
+            $script:RestUrlFromConfig = $true
+        }
+        if (-not $script:RestUsernameExplicit -and $config.HasUsername) { $script:RestUsername = $config.Username }
+        if (-not $script:RestPasswordExplicit -and $config.HasPassword) { $script:RestPassword = $config.Password }
+        if (-not $script:RestTimeoutExplicit -and $config.HasTimeout) {
+            $script:RestTimeoutSeconds = $config.TimeoutSeconds
+            $script:RestTimeoutFromConfig = $true
+        }
+
+        $usernameDisplay = if ([string]::IsNullOrEmpty($config.Username)) { "(empty)" } else { $config.Username }
+        $passwordStatus = if ([string]::IsNullOrEmpty($config.Password)) { "empty" } else { "configured" }
+        Write-Info "Found existing REST config: $candidate"
+        Write-Host "    Previous REST URL: $(if ([string]::IsNullOrEmpty($config.Url)) { '(empty)' } else { $config.Url })"
+        Write-Host "    Previous REST username: $usernameDisplay"
+        Write-Host "    Previous REST password: $passwordStatus"
+        return $true
+    }
+    return $false
 }
 
 function Test-PamRepo {
@@ -412,10 +508,21 @@ $script:RepoDir = $DefaultRepoDir
 $script:RepoDirExplicit = $false
 $script:RefreshRepo = $true
 $script:SourceDir = ""
-$script:RestUrl = Get-EnvOrDefault "PAM_OS_REST_URL" "http://127.0.0.1:8765"
-$script:RestUsername = Get-EnvOrDefault "PAM_OS_REST_USERNAME" ""
-$script:RestPassword = Get-EnvOrDefault "PAM_OS_REST_PASSWORD" ""
-$script:RestTimeoutSeconds = [int](Get-EnvOrDefault "PAM_OS_REST_TIMEOUT_SECONDS" "10")
+$envRestUrl = [Environment]::GetEnvironmentVariable("PAM_OS_REST_URL")
+$envRestUsername = [Environment]::GetEnvironmentVariable("PAM_OS_REST_USERNAME")
+$envRestPassword = [Environment]::GetEnvironmentVariable("PAM_OS_REST_PASSWORD")
+$envRestTimeout = [Environment]::GetEnvironmentVariable("PAM_OS_REST_TIMEOUT_SECONDS")
+$script:RestUrlExplicit = $null -ne $envRestUrl
+$script:RestUsernameExplicit = $null -ne $envRestUsername
+$script:RestPasswordExplicit = $null -ne $envRestPassword
+$script:RestTimeoutExplicit = $null -ne $envRestTimeout
+$script:RestUrlFromConfig = $false
+$script:RestTimeoutFromConfig = $false
+$script:RestUrl = if ($script:RestUrlExplicit) { $envRestUrl } else { "" }
+$script:RestUsername = if ($script:RestUsernameExplicit) { $envRestUsername } else { "" }
+$script:RestPassword = if ($script:RestPasswordExplicit) { $envRestPassword } else { "" }
+$script:RestTimeoutSeconds = if ($script:RestTimeoutExplicit) { [int]$envRestTimeout } else { 0 }
+$script:ExistingRestConfig = ""
 $script:WriteMarketplace = $true
 $script:WriteGlobalSkill = $true
 
@@ -428,11 +535,11 @@ for ($i = 0; $i -lt $InstallerArgs.Count; $i++) {
         "--opencode" { $script:InstallOpenCode = $true }
         "--hermes" { $script:InstallHermes = $true }
         "--all" { Enable-Target "all" }
-        "--rest-url" { $i++; $script:RestUrl = $InstallerArgs[$i] }
-        "--rest-username" { $i++; $script:RestUsername = $InstallerArgs[$i] }
-        "--rest-user" { $i++; $script:RestUsername = $InstallerArgs[$i] }
-        "--rest-password" { $i++; $script:RestPassword = $InstallerArgs[$i] }
-        "--rest-timeout" { $i++; $script:RestTimeoutSeconds = [int]$InstallerArgs[$i] }
+        "--rest-url" { $i++; $script:RestUrl = $InstallerArgs[$i]; $script:RestUrlExplicit = $true }
+        "--rest-username" { $i++; $script:RestUsername = $InstallerArgs[$i]; $script:RestUsernameExplicit = $true }
+        "--rest-user" { $i++; $script:RestUsername = $InstallerArgs[$i]; $script:RestUsernameExplicit = $true }
+        "--rest-password" { $i++; $script:RestPassword = $InstallerArgs[$i]; $script:RestPasswordExplicit = $true }
+        "--rest-timeout" { $i++; $script:RestTimeoutSeconds = [int]$InstallerArgs[$i]; $script:RestTimeoutExplicit = $true }
         "--repo-dir" { $i++; $script:RepoDir = $InstallerArgs[$i]; $script:RepoDirExplicit = $true; $script:RefreshRepo = $false }
         "--repo-url" { $i++; $script:RepoUrl = $InstallerArgs[$i] }
         "--ref" { $i++; $script:RepoRef = $InstallerArgs[$i] }
@@ -465,6 +572,12 @@ if (-not ($script:InstallCodex -or $script:InstallClaude -or $script:InstallOpen
     else { Select-InstallTargets }
 }
 
+$foundExistingRestConfig = Import-ExistingRestConfig
+if (-not $foundExistingRestConfig) {
+    Write-Info "No existing REST config found; using installer defaults for the prompts."
+}
+if (-not $script:RestUrlExplicit -and -not $script:RestUrlFromConfig) { $script:RestUrl = "http://127.0.0.1:8765" }
+if (-not $script:RestTimeoutExplicit -and -not $script:RestTimeoutFromConfig) { $script:RestTimeoutSeconds = 10 }
 $script:RestUrl = Prompt-Value "PAM-OS REST URL" $script:RestUrl
 $script:RestUsername = Prompt-Value "REST username" $script:RestUsername
 $script:RestPassword = Prompt-Secret "REST password" $script:RestPassword

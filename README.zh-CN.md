@@ -120,7 +120,7 @@ Windows PowerShell：
 .\scripts\install-plugin-local.ps1
 ```
 
-安装器会在支持的平台上限制凭据配置文件权限。远程服务必须使用 HTTPS，并避免把密码直接写进 shell 历史。
+安装器会优先读取已有 skill 的 REST URL、用户名、密码和超时配置，并把它们作为默认值。交互安装会展示旧 URL 和用户名，密码只显示“已配置/未配置”，直接回车即可沿用；命令行参数和 `PAM_OS_REST_*` 环境变量优先级更高。安装器会在支持的平台上限制凭据配置文件权限。远程服务必须使用 HTTPS，并避免把密码直接写进 shell 历史。
 
 ## REST API
 

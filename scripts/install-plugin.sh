@@ -44,12 +44,12 @@ Options:
   --opencode          Install OpenCode guidance and Claude-compatible skill.
   --hermes            Install Hermes skill and guidance.
   --all               Install all supported targets.
-  --rest-url URL      PAM-OS REST server URL. Default: http://127.0.0.1:8765.
+  --rest-url URL      PAM-OS REST server URL. Default: existing config, otherwise http://127.0.0.1:8765.
   --rest-username USER
-                      REST Basic Auth username. Default: empty.
+                      REST Basic Auth username. Default: existing config, otherwise empty.
   --rest-password PASS
-                      REST Basic Auth password. Default: empty.
-  --rest-timeout SEC  REST request timeout written to skill config. Default: 10.
+                      REST Basic Auth password. Default: existing config, otherwise empty.
+  --rest-timeout SEC  REST request timeout. Default: existing config, otherwise 10.
   --repo-dir DIR      Use an existing PAM-OS checkout. Default: managed repo.
   --repo-url URL      Git repository used to refresh the managed repo.
   --ref REF           Git ref used to refresh the managed repo. Default: master.
@@ -169,14 +169,19 @@ prompt_value() {
 prompt_secret() {
   local prompt="$1"
   local default="$2"
-  local reply
+  local reply rendered_prompt
 
   if [[ "$ASSUME_YES" == "1" ]]; then
     printf '%s' "$default"
     return
   fi
 
-  read_secret_user reply "$prompt (leave empty for none): " || die "Interactive prompt requires a TTY. Pass explicit REST options or use --yes."
+  if [[ -n "$default" ]]; then
+    rendered_prompt="$prompt (configured; press Enter to keep, or type a replacement): "
+  else
+    rendered_prompt="$prompt (leave empty for none): "
+  fi
+  read_secret_user reply "$rendered_prompt" || die "Interactive prompt requires a TTY. Pass explicit REST options or use --yes."
   printf '%s' "${reply:-$default}"
 }
 
@@ -243,7 +248,98 @@ abs_path() {
 }
 
 toml_escape() {
-  printf "%s" "$1" | sed "s/\\\\/\\\\\\\\/g; s/\"/\\\"/g"
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+toml_unescape() {
+  printf '%s' "$1" | sed 's/\\"/"/g; s/\\\\/\\/g'
+}
+
+read_rest_config() {
+  local path="$1"
+  local line section="" key value
+
+  CONFIG_HAS_URL=0
+  CONFIG_HAS_USERNAME=0
+  CONFIG_HAS_PASSWORD=0
+  CONFIG_HAS_TIMEOUT=0
+  CONFIG_URL=""
+  CONFIG_USERNAME=""
+  CONFIG_PASSWORD=""
+  CONFIG_TIMEOUT=""
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    if [[ "$line" =~ ^[[:space:]]*\[([^]]+)\][[:space:]]*$ ]]; then
+      section="${BASH_REMATCH[1]}"
+      continue
+    fi
+    [[ "$section" == "rest" ]] || continue
+
+    if [[ "$line" =~ ^[[:space:]]*(url|username|password)[[:space:]]*=[[:space:]]*\"(.*)\"[[:space:]]*$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      value="$(toml_unescape "${BASH_REMATCH[2]}")"
+      case "$key" in
+        url) CONFIG_HAS_URL=1; CONFIG_URL="$value" ;;
+        username) CONFIG_HAS_USERNAME=1; CONFIG_USERNAME="$value" ;;
+        password) CONFIG_HAS_PASSWORD=1; CONFIG_PASSWORD="$value" ;;
+      esac
+    elif [[ "$line" =~ ^[[:space:]]*timeout_seconds[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]]*$ ]]; then
+      CONFIG_HAS_TIMEOUT=1
+      CONFIG_TIMEOUT="${BASH_REMATCH[1]}"
+    fi
+  done < "$path"
+
+  [[ "$CONFIG_HAS_URL$CONFIG_HAS_USERNAME$CONFIG_HAS_PASSWORD$CONFIG_HAS_TIMEOUT" != "0000" ]]
+}
+
+load_existing_rest_config() {
+  local candidate password_status username_display
+  local -a candidates=()
+
+  if [[ "$INSTALL_CODEX" == "1" ]]; then
+    candidates+=("$CODEX_SKILL_DIR/config.toml" "$PLUGIN_DIR/skills/$PLUGIN_NAME/config.toml")
+  fi
+  if [[ "$INSTALL_CLAUDE" == "1" || "$INSTALL_OPENCODE" == "1" ]]; then
+    candidates+=("$CLAUDE_SKILL_DIR/config.toml")
+  fi
+  if [[ "$INSTALL_HERMES" == "1" ]]; then
+    candidates+=("$HERMES_SKILL_DIR/config.toml")
+  fi
+  candidates+=(
+    "$CODEX_SKILL_DIR/config.toml"
+    "$PLUGIN_DIR/skills/$PLUGIN_NAME/config.toml"
+    "$CLAUDE_SKILL_DIR/config.toml"
+    "$HERMES_SKILL_DIR/config.toml"
+  )
+
+  for candidate in "${candidates[@]}"; do
+    [[ -f "$candidate" ]] || continue
+    read_rest_config "$candidate" || continue
+
+    EXISTING_REST_CONFIG="$candidate"
+    if [[ "$REST_URL_EXPLICIT" != "1" && "$CONFIG_HAS_URL" == "1" ]]; then
+      REST_URL="$CONFIG_URL"
+      REST_URL_FROM_CONFIG=1
+    fi
+    [[ "$REST_USERNAME_EXPLICIT" == "1" || "$CONFIG_HAS_USERNAME" != "1" ]] || REST_USERNAME="$CONFIG_USERNAME"
+    [[ "$REST_PASSWORD_EXPLICIT" == "1" || "$CONFIG_HAS_PASSWORD" != "1" ]] || REST_PASSWORD="$CONFIG_PASSWORD"
+    if [[ "$REST_TIMEOUT_EXPLICIT" != "1" && "$CONFIG_HAS_TIMEOUT" == "1" ]]; then
+      REST_TIMEOUT_SECONDS="$CONFIG_TIMEOUT"
+      REST_TIMEOUT_FROM_CONFIG=1
+    fi
+
+    username_display="${CONFIG_USERNAME:-(empty)}"
+    password_status="empty"
+    [[ -n "$CONFIG_PASSWORD" ]] && password_status="configured"
+    info "Found existing REST config: $candidate"
+    printf '    Previous REST URL: %s\n' "${CONFIG_URL:-(empty)}" >&2
+    printf '    Previous REST username: %s\n' "$username_display" >&2
+    printf '    Previous REST password: %s\n' "$password_status" >&2
+    return 0
+  done
+
+  return 1
 }
 
 is_pam_repo() {
@@ -490,10 +586,21 @@ REPO_DIR="$DEFAULT_REPO_DIR"
 REPO_DIR_EXPLICIT=0
 REFRESH_REPO=1
 SOURCE_DIR=""
-REST_URL="${PAM_OS_REST_URL:-http://127.0.0.1:8765}"
-REST_USERNAME="${PAM_OS_REST_USERNAME:-}"
-REST_PASSWORD="${PAM_OS_REST_PASSWORD:-}"
-REST_TIMEOUT_SECONDS="${PAM_OS_REST_TIMEOUT_SECONDS:-10}"
+REST_URL="${PAM_OS_REST_URL-}"
+REST_USERNAME="${PAM_OS_REST_USERNAME-}"
+REST_PASSWORD="${PAM_OS_REST_PASSWORD-}"
+REST_TIMEOUT_SECONDS="${PAM_OS_REST_TIMEOUT_SECONDS-}"
+REST_URL_EXPLICIT=0
+REST_USERNAME_EXPLICIT=0
+REST_PASSWORD_EXPLICIT=0
+REST_TIMEOUT_EXPLICIT=0
+REST_URL_FROM_CONFIG=0
+REST_TIMEOUT_FROM_CONFIG=0
+[[ -n "${PAM_OS_REST_URL+x}" ]] && REST_URL_EXPLICIT=1
+[[ -n "${PAM_OS_REST_USERNAME+x}" ]] && REST_USERNAME_EXPLICIT=1
+[[ -n "${PAM_OS_REST_PASSWORD+x}" ]] && REST_PASSWORD_EXPLICIT=1
+[[ -n "${PAM_OS_REST_TIMEOUT_SECONDS+x}" ]] && REST_TIMEOUT_EXPLICIT=1
+EXISTING_REST_CONFIG=""
 WRITE_MARKETPLACE=1
 WRITE_GLOBAL_SKILL=1
 
@@ -505,10 +612,10 @@ while [[ $# -gt 0 ]]; do
     --opencode) INSTALL_OPENCODE=1; shift ;;
     --hermes) INSTALL_HERMES=1; shift ;;
     --all) enable_target all; shift ;;
-    --rest-url) REST_URL="${2:-}"; shift 2 ;;
-    --rest-username|--rest-user) REST_USERNAME="${2:-}"; shift 2 ;;
-    --rest-password) REST_PASSWORD="${2:-}"; shift 2 ;;
-    --rest-timeout) REST_TIMEOUT_SECONDS="${2:-}"; shift 2 ;;
+    --rest-url) REST_URL="${2:-}"; REST_URL_EXPLICIT=1; shift 2 ;;
+    --rest-username|--rest-user) REST_USERNAME="${2:-}"; REST_USERNAME_EXPLICIT=1; shift 2 ;;
+    --rest-password) REST_PASSWORD="${2:-}"; REST_PASSWORD_EXPLICIT=1; shift 2 ;;
+    --rest-timeout) REST_TIMEOUT_SECONDS="${2:-}"; REST_TIMEOUT_EXPLICIT=1; shift 2 ;;
     --repo-dir) REPO_DIR="${2:-}"; REPO_DIR_EXPLICIT=1; REFRESH_REPO=0; shift 2 ;;
     --repo-url) REPO_URL="${2:-}"; shift 2 ;;
     --ref) REPO_REF="${2:-}"; shift 2 ;;
@@ -542,6 +649,15 @@ if [[ "$INSTALL_CODEX$INSTALL_CLAUDE$INSTALL_OPENCODE$INSTALL_HERMES" == "0000" 
   fi
 fi
 
+if ! load_existing_rest_config; then
+  info "No existing REST config found; using installer defaults for the prompts."
+fi
+if [[ "$REST_URL_EXPLICIT" != "1" && "$REST_URL_FROM_CONFIG" != "1" ]]; then
+  REST_URL="http://127.0.0.1:8765"
+fi
+if [[ "$REST_TIMEOUT_EXPLICIT" != "1" && "$REST_TIMEOUT_FROM_CONFIG" != "1" ]]; then
+  REST_TIMEOUT_SECONDS="10"
+fi
 configure_rest_runtime
 [[ -n "$REST_URL" ]] || die "--rest-url must not be empty."
 [[ "$REST_TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$REST_TIMEOUT_SECONDS" -gt 0 ]] || die "--rest-timeout must be a positive integer."
