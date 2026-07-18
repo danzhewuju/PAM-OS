@@ -7,7 +7,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 DEFAULT_REPOSITORY = "danzhewuju/PAM-OS"
 GITHUB_API = "https://api.github.com"
 

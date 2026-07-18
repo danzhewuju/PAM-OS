@@ -35,6 +35,8 @@ $DefaultOpenCodeAgentsFile = Join-PathMany @($AppDataDir, "opencode", "AGENTS.md
 $DefaultHermesAgentsFile = Join-Path $HermesHome "AGENTS.md"
 $DefaultHermesSkillDir = Join-PathMany @($HermesHome, "skills", $PluginName)
 $LegacyServerName = "pam_os_memory"
+$ExpectedApiVersion = "v1"
+$VersionCheckTimeoutSeconds = 3
 
 function Write-Info { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Blue }
 function Write-Warn { param([string]$Message) Write-Warning $Message }
@@ -42,10 +44,10 @@ function Stop-Install { param([string]$Message) Write-Error "error: $Message"; e
 
 function Show-Usage {
     @"
-PAM-OS plugin installer for Windows
+PAM-OS installer and updater for Windows
 
 Usage:
-  .\scripts\install-plugin.ps1 [options]
+  .\scripts\install.ps1 [options]
 
 Options:
   --target TARGET      Install target: codex, claude, opencode, hermes, or all. Can be repeated.
@@ -60,6 +62,8 @@ Options:
   --rest-password PASS
                       REST Basic Auth password. Default: existing config, otherwise empty.
   --rest-timeout SEC  REST request timeout. Default: existing config, otherwise 10.
+  --skip-version-check
+                      Do not probe server metadata during installation.
   --repo-dir DIR      Use an existing PAM-OS checkout. Default: $DefaultRepoDir.
   --repo-url URL      Git repository used to refresh the managed repo.
   --ref REF           Git ref used to refresh the managed repo. Default: master.
@@ -268,6 +272,49 @@ function Enable-Target {
     }
 }
 
+function Test-GuidanceMarker {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    return [bool](Select-String -LiteralPath $Path -SimpleMatch '<!-- PAM-OS MEMORY BEGIN -->' -Quiet)
+}
+
+function Find-ExistingTargets {
+    $detected = $false
+    if ((Test-Path -LiteralPath $script:PluginDir -PathType Container) -or (Test-Path -LiteralPath $script:CodexSkillDir -PathType Container)) {
+        $script:InstallCodex = $true
+        $detected = $true
+    }
+    if (Test-Path -LiteralPath $script:ClaudeSkillDir -PathType Container) {
+        $script:InstallClaude = $true
+        $detected = $true
+    }
+    if (Test-GuidanceMarker $script:OpenCodeAgentsFile) {
+        $script:InstallOpenCode = $true
+        $detected = $true
+    }
+    if (Test-Path -LiteralPath $script:HermesSkillDir -PathType Container) {
+        $script:InstallHermes = $true
+        $detected = $true
+    }
+    return $detected
+}
+
+function Set-InstallAction {
+    $script:InstallAction = "install"
+    if ($script:InstallCodex -and ((Test-Path -LiteralPath $script:PluginDir -PathType Container) -or (Test-Path -LiteralPath $script:CodexSkillDir -PathType Container))) {
+        $script:InstallAction = "update"
+    }
+    elseif ($script:InstallClaude -and (Test-Path -LiteralPath $script:ClaudeSkillDir -PathType Container)) {
+        $script:InstallAction = "update"
+    }
+    elseif ($script:InstallOpenCode -and (Test-GuidanceMarker $script:OpenCodeAgentsFile)) {
+        $script:InstallAction = "update"
+    }
+    elseif ($script:InstallHermes -and (Test-Path -LiteralPath $script:HermesSkillDir -PathType Container)) {
+        $script:InstallAction = "update"
+    }
+}
+
 function Select-InstallTargets {
     Write-Host ""
     Write-Host "Install targets:"
@@ -309,13 +356,13 @@ function Refresh-ManagedRepo {
     $git = Get-Command git -ErrorAction SilentlyContinue
     if ($null -eq $git) { Stop-Install "git is required to refresh the managed PAM-OS repo. Re-run with --no-refresh or --repo-dir." }
     if (Test-Path -LiteralPath (Join-Path $script:RepoDir ".git") -PathType Container) {
-        Write-Info "Refreshing managed PAM-OS repo at $($script:RepoDir) ($($script:RepoRef))"
+        Write-Info "Updating managed PAM-OS checkout at $($script:RepoDir) ($($script:RepoRef))"
         & git -C $script:RepoDir fetch --depth 1 origin $script:RepoRef | Out-Null
         & git -C $script:RepoDir checkout -q FETCH_HEAD
         return
     }
     if (Test-Path -LiteralPath $script:RepoDir) { Stop-Install "Managed repo path exists but is not a git checkout: $($script:RepoDir)" }
-    Write-Info "Cloning managed PAM-OS repo into $($script:RepoDir) ($($script:RepoRef))"
+    Write-Info "Creating managed PAM-OS checkout at $($script:RepoDir) ($($script:RepoRef))"
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $script:RepoDir) | Out-Null
     & git clone --depth 1 --branch $script:RepoRef $script:RepoUrl $script:RepoDir | Out-Null
 }
@@ -374,6 +421,14 @@ function Write-SkillConfig {
     $content = @"
 # PAM-OS REST client configuration.
 
+[versions]
+skill = "$(ConvertTo-TomlString $script:SkillVersion)"
+api = "$(ConvertTo-TomlString $ExpectedApiVersion)"
+server = "$(ConvertTo-TomlString $script:ServerVersion)"
+server_api = "$(ConvertTo-TomlString $script:ServerApiVersion)"
+server_checked_at = "$(ConvertTo-TomlString $script:ServerCheckedAt)"
+status = "$(ConvertTo-TomlString $script:VersionStatus)"
+
 [rest]
 url = "$(ConvertTo-TomlString $script:RestUrl)"
 username = "$(ConvertTo-TomlString $script:RestUsername)"
@@ -391,20 +446,122 @@ timeout_seconds = $($script:RestTimeoutSeconds)
     }
 }
 
+function Read-SkillVersion {
+    $manifestPath = Join-PathMany @($script:RepoDir, "plugins", $PluginName, ".codex-plugin", "plugin.json")
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        Stop-Install "Plugin manifest not found: $manifestPath"
+    }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $version = [string]$manifest.version
+    if ([string]::IsNullOrWhiteSpace($version)) { Stop-Install "plugin manifest version is missing" }
+    return $version.Trim()
+}
+
+function Get-VersionRequestHeaders {
+    $headers = @{ Accept = "application/json" }
+    if (-not [string]::IsNullOrEmpty($script:RestUsername) -and -not [string]::IsNullOrEmpty($script:RestPassword)) {
+        $tokenBytes = [Text.Encoding]::UTF8.GetBytes("$($script:RestUsername):$($script:RestPassword)")
+        $headers.Authorization = "Basic $([Convert]::ToBase64String($tokenBytes))"
+    }
+    return $headers
+}
+
+function Get-HttpStatusCode {
+    param($ErrorRecord)
+    try { return [int]$ErrorRecord.Exception.Response.StatusCode }
+    catch { return 0 }
+}
+
+function Probe-ServerVersion {
+    $script:ServerVersion = ""
+    $script:ServerApiVersion = ""
+    $script:ServerCheckedAt = ""
+    $script:VersionStatus = "not_checked"
+    if (-not $script:CheckServerVersion) { return }
+
+    $script:ServerCheckedAt = [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $headers = Get-VersionRequestHeaders
+    $baseUrl = $script:RestUrl.TrimEnd('/')
+    $timeout = [Math]::Min($VersionCheckTimeoutSeconds, $script:RestTimeoutSeconds)
+    $metaStatus = 0
+
+    try {
+        $metadata = Invoke-RestMethod -Method Get -Uri "$baseUrl/v1/meta" -Headers $headers -TimeoutSec $timeout
+        $script:ServerVersion = ([string]$metadata.version).Trim()
+        $script:ServerApiVersion = ([string]$metadata.api_version).Trim()
+        if ($script:ServerVersion -eq $script:SkillVersion -and $script:ServerApiVersion -eq $ExpectedApiVersion) {
+            $script:VersionStatus = "match"
+        }
+        else {
+            $script:VersionStatus = "mismatch"
+        }
+    }
+    catch {
+        $metaStatus = Get-HttpStatusCode $_
+        if ($metaStatus -eq 401 -or $metaStatus -eq 403) {
+            $script:VersionStatus = "authentication_failed"
+        }
+        else {
+            try {
+                $openapi = Invoke-RestMethod -Method Get -Uri "$baseUrl/openapi.json" -Headers $headers -TimeoutSec $timeout
+                $script:ServerVersion = ([string]$openapi.info.version).Trim()
+                $paths = @($openapi.paths.PSObject.Properties.Name)
+                $hasV1Path = @($paths | Where-Object { $_.StartsWith("/v1/") }).Count -gt 0
+                $script:ServerApiVersion = if ($hasV1Path) { "v1" } else { "unversioned" }
+                if ($script:ServerVersion -eq $script:SkillVersion -and $script:ServerApiVersion -eq $ExpectedApiVersion) {
+                    $script:VersionStatus = "match"
+                }
+                else {
+                    $script:VersionStatus = "mismatch"
+                }
+            }
+            catch {
+                $openapiStatus = Get-HttpStatusCode $_
+                if ($openapiStatus -eq 401 -or $openapiStatus -eq 403) {
+                    $script:VersionStatus = "authentication_failed"
+                }
+                elseif ($metaStatus -eq 0 -and $openapiStatus -eq 0) {
+                    $script:VersionStatus = "unreachable"
+                }
+                else {
+                    $script:VersionStatus = "unknown"
+                }
+            }
+        }
+    }
+
+    if ($script:VersionStatus -eq "match") {
+        Write-Info "Version check: skill $($script:SkillVersion) / API $ExpectedApiVersion matches server $($script:ServerVersion) / API $($script:ServerApiVersion)"
+    }
+    elseif ($script:VersionStatus -eq "mismatch") {
+        $serverVersion = if ([string]::IsNullOrWhiteSpace($script:ServerVersion)) { "unknown" } else { $script:ServerVersion }
+        $serverApi = if ([string]::IsNullOrWhiteSpace($script:ServerApiVersion)) { "unknown" } else { $script:ServerApiVersion }
+        Write-Warn "Version mismatch: skill $($script:SkillVersion) / API $ExpectedApiVersion; server $serverVersion / API $serverApi"
+    }
+    else {
+        Write-Warn "Could not verify server version: $($script:VersionStatus)"
+    }
+}
+
 function Install-Skill {
     param([string]$Source, [string]$Destination, [string]$Label)
+    $stage = "$Destination.pam-os-stage.$PID"
     if (Test-Path -LiteralPath $Destination) {
         if (Confirm-Action "Replace existing $Label at $Destination?" "y") {
-            Remove-Item -LiteralPath $Destination -Recurse -Force
+            # The existing install remains in place until staging succeeds.
         }
         else {
             Write-Warn "Skipped $Label install."
             return
         }
     }
-    Write-Info "Installing $Label to $Destination"
-    Copy-Directory $Source $Destination
-    Write-SkillConfig (Join-Path $Destination "config.toml")
+    Write-Info "Staging $Label for $Destination"
+    Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Directory $Source $stage
+    Write-SkillConfig (Join-Path $stage "config.toml")
+    Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
+    Move-Item -LiteralPath $stage -Destination $Destination
+    Write-Info "Installed $Label to $Destination"
 }
 
 function Write-BundledSkillConfig {
@@ -494,6 +651,7 @@ $script:InstallCodex = $false
 $script:InstallClaude = $false
 $script:InstallOpenCode = $false
 $script:InstallHermes = $false
+$script:InstallAction = "install"
 $script:PluginDir = $DefaultPluginDir
 $script:MarketplacePath = $DefaultMarketplacePath
 $script:CodexConfig = $DefaultCodexConfig
@@ -525,6 +683,12 @@ $script:RestTimeoutSeconds = if ($script:RestTimeoutExplicit) { [int]$envRestTim
 $script:ExistingRestConfig = ""
 $script:WriteMarketplace = $true
 $script:WriteGlobalSkill = $true
+$script:CheckServerVersion = $true
+$script:SkillVersion = ""
+$script:ServerVersion = ""
+$script:ServerApiVersion = ""
+$script:ServerCheckedAt = ""
+$script:VersionStatus = "not_checked"
 
 for ($i = 0; $i -lt $InstallerArgs.Count; $i++) {
     $arg = $InstallerArgs[$i]
@@ -540,6 +704,7 @@ for ($i = 0; $i -lt $InstallerArgs.Count; $i++) {
         "--rest-user" { $i++; $script:RestUsername = $InstallerArgs[$i]; $script:RestUsernameExplicit = $true }
         "--rest-password" { $i++; $script:RestPassword = $InstallerArgs[$i]; $script:RestPasswordExplicit = $true }
         "--rest-timeout" { $i++; $script:RestTimeoutSeconds = [int]$InstallerArgs[$i]; $script:RestTimeoutExplicit = $true }
+        "--skip-version-check" { $script:CheckServerVersion = $false }
         "--repo-dir" { $i++; $script:RepoDir = $InstallerArgs[$i]; $script:RepoDirExplicit = $true; $script:RefreshRepo = $false }
         "--repo-url" { $i++; $script:RepoUrl = $InstallerArgs[$i] }
         "--ref" { $i++; $script:RepoRef = $InstallerArgs[$i] }
@@ -568,9 +733,15 @@ for ($i = 0; $i -lt $InstallerArgs.Count; $i++) {
 }
 
 if (-not ($script:InstallCodex -or $script:InstallClaude -or $script:InstallOpenCode -or $script:InstallHermes)) {
-    if ($script:AssumeYes) { $script:InstallCodex = $true }
+    if (Find-ExistingTargets) {
+        $script:AssumeYes = $true
+        Write-Info "Detected an existing PAM-OS integration; updating all installed targets."
+    }
+    elseif ($script:AssumeYes) { $script:InstallCodex = $true }
     else { Select-InstallTargets }
 }
+Set-InstallAction
+Write-Info "Mode: $($script:InstallAction)"
 
 $foundExistingRestConfig = Import-ExistingRestConfig
 if (-not $foundExistingRestConfig) {
@@ -595,15 +766,18 @@ $script:HermesSkillDir = Resolve-AbsolutePath $script:HermesSkillDir
 if (-not [string]::IsNullOrWhiteSpace($script:SourceDir)) { $script:SourceDir = Resolve-AbsolutePath $script:SourceDir }
 
 Resolve-RepoDir
+$script:SkillVersion = Read-SkillVersion
+Probe-ServerVersion
 $pluginSource = Find-PluginSource
 $skillSource = Find-SkillSource
 if ($script:InstallCodex -and [string]::IsNullOrWhiteSpace($pluginSource)) { Stop-Install "Could not find plugin source. Run from a PAM-OS checkout or pass --source." }
 if ([string]::IsNullOrWhiteSpace($skillSource)) { Stop-Install "Could not find skill source. Run from a PAM-OS checkout or pass --source." }
 
 if ($script:InstallCodex) {
+    $pluginStage = "$($script:PluginDir).pam-os-stage.$PID"
     if (Test-Path -LiteralPath $script:PluginDir) {
         if (Confirm-Action "Replace existing Codex plugin at $($script:PluginDir)?" "y") {
-            Remove-Item -LiteralPath $script:PluginDir -Recurse -Force
+            # The existing install remains in place until staging succeeds.
         }
         else {
             Write-Warn "Skipped Codex plugin install."
@@ -611,9 +785,13 @@ if ($script:InstallCodex) {
         }
     }
     if ($script:InstallCodex) {
-        Write-Info "Installing Codex plugin from $pluginSource"
-        Copy-Directory $pluginSource $script:PluginDir
-        Write-BundledSkillConfig $script:PluginDir
+        Write-Info "Staging Codex plugin from $pluginSource"
+        Remove-Item -LiteralPath $pluginStage -Recurse -Force -ErrorAction SilentlyContinue
+        Copy-Directory $pluginSource $pluginStage
+        Write-BundledSkillConfig $pluginStage
+        Remove-Item -LiteralPath $script:PluginDir -Recurse -Force -ErrorAction SilentlyContinue
+        Move-Item -LiteralPath $pluginStage -Destination $script:PluginDir
+        Write-Info "Installed Codex plugin to $($script:PluginDir)"
         Remove-LegacyCodexConfig $script:CodexConfig
         if ($script:WriteGlobalSkill) {
             Install-Skill (Join-PathMany @($script:PluginDir, "skills", $PluginName)) $script:CodexSkillDir "Codex global skill"
@@ -643,11 +821,19 @@ if ($script:InstallHermes) {
     Write-Info "Updated Hermes guidance: $($script:HermesAgentsFile)"
 }
 
-Write-Info "Install complete"
+Write-Info "PAM-OS $($script:InstallAction) complete"
 @"
 
 REST runtime:
   REST URL: $($script:RestUrl)
+
+Operation:
+  Mode: $($script:InstallAction)
+  Skill version: $($script:SkillVersion)
+  Expected API: $ExpectedApiVersion
+  Server version: $(if ([string]::IsNullOrWhiteSpace($script:ServerVersion)) { 'unknown' } else { $script:ServerVersion })
+  Server API: $(if ([string]::IsNullOrWhiteSpace($script:ServerApiVersion)) { 'unknown' } else { $script:ServerApiVersion })
+  Version status: $($script:VersionStatus)
 
 Skill paths:
   $($script:CodexSkillDir)

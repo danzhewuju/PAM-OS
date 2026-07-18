@@ -92,9 +92,17 @@ curl -sS -X POST http://127.0.0.1:8765/v1/memory/capture \
 
 ## Plugin and Skill
 
-The packaged `pam-os-memory` skill tells Codex, Claude Code, OpenCode, and Hermes when to prepare, capture, and observe memory. Its `config.toml` contains only REST client settings:
+The packaged `pam-os-memory` skill tells Codex, Claude Code, OpenCode, and Hermes when to prepare, capture, and observe memory. Its `config.toml` records the installed skill/API versions, the server version observed during installation, and the REST client settings:
 
 ```toml
+[versions]
+skill = "0.4.2"
+api = "v1"
+server = "0.4.2"
+server_api = "v1"
+server_checked_at = "2026-07-18T00:00:00Z"
+status = "match"
+
 [rest]
 url = "http://127.0.0.1:8765"
 username = ""
@@ -105,22 +113,22 @@ timeout_seconds = 10
 Install from GitHub:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-plugin.sh | bash
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install.sh | bash
 ```
 
 Install from the current checkout:
 
 ```bash
-scripts/install-plugin-local.sh
+./scripts/install.sh --repo-dir "$PWD" --yes
 ```
 
 Windows PowerShell:
 
 ```powershell
-.\scripts\install-plugin-local.ps1
+.\scripts\install.ps1 --repo-dir $PWD --yes
 ```
 
-The installer reuses an existing installed skill's REST URL, username, password, and timeout as defaults. Interactive installs show the previous URL and username, report whether a password is configured without revealing it, and let you press Enter to keep the existing values. Explicit command-line options and `PAM_OS_REST_*` environment variables take precedence. REST credentials are written with restrictive file permissions where supported. For remote servers, use HTTPS and avoid passing passwords in shell history.
+The two platform installers handle both first install and update. With no target flags they detect existing integrations and update all installed targets; otherwise a first install selects targets interactively or defaults to Codex with `--yes`. The installer reuses an existing skill's REST URL, username, password, and timeout, refreshes the managed checkout, probes server metadata, and writes an observable version snapshot. Explicit command-line options and `PAM_OS_REST_*` environment variables take precedence. REST credentials are written with restrictive file permissions where supported. For remote servers, use HTTPS and avoid passing passwords in shell history.
 
 ## REST API
 
@@ -238,10 +246,10 @@ Quality evaluation remains a Python development API through `pam_os.quality.eval
 
 ## Update
 
-Read the running version from `GET /v1/meta`, then update the managed checkout and reinstall integrations:
+Run the same installer again. It detects existing targets, updates the managed checkout, reinstalls integrations, and refreshes the skill/server version snapshot:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/update.sh | bash
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install.sh | bash
 ```
 
 ## License

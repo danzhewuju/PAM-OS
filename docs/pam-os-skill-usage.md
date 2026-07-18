@@ -5,19 +5,19 @@ PAM-OS skill 只通过 REST API 访问记忆服务。
 ## 安装
 
 ```bash
-./scripts/install-plugin.sh
+./scripts/install.sh
 ```
 
-本地开发：
+安装器再次运行时会自动识别已有目标并执行更新。本地开发可直接指定当前 checkout：
 
 ```bash
-./scripts/install-plugin-local.sh
+./scripts/install.sh --repo-dir "$PWD" --yes
 ```
 
 Windows：
 
 ```powershell
-.\scripts\install-plugin-local.ps1
+.\scripts\install.ps1 --repo-dir $PWD --yes
 ```
 
 支持 Codex、Claude Code、OpenCode 和 Hermes。安装器会复制 skill、写入 REST 配置，并清理它管理过的旧本地工具注册。重装时会读取已有 skill 配置并默认沿用 URL、用户名、密码和超时；密码只显示配置状态，不会明文回显。
@@ -25,6 +25,14 @@ Windows：
 ## 配置
 
 ```toml
+[versions]
+skill = "0.4.2"
+api = "v1"
+server = "0.4.2"
+server_api = "v1"
+server_checked_at = "2026-07-18T00:00:00Z"
+status = "match"
+
 [rest]
 url = "http://127.0.0.1:8765"
 username = ""

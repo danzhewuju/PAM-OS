@@ -99,14 +99,13 @@ def test_inspect_memory_rest_api_returns_requested_table(tmp_path):
     assert payload["details"]["memories"]
 
 
-def test_inspect_memory_rest_api_rejects_unknown_table(tmp_path):
+def test_inspect_memory_endpoint_rejects_unknown_table(tmp_path):
     app = create_app(db_path=tmp_path / "memory.sqlite3")
     inspect_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/inspect")
 
-    with pytest.raises(Exception) as exc:
+    with pytest.raises(ValueError, match="table must be one of"):
         inspect_route.endpoint(table="secrets", limit=20, q=None)
 
-    assert "400" in str(exc.value)
 
 
 def test_search_memory_rest_api_supports_type_and_score_filters(tmp_path):

@@ -1,5 +1,13 @@
 # PAM-OS REST client configuration.
 
+[versions]
+skill = "0.4.2"
+api = "v1"
+server = ""
+server_api = ""
+server_checked_at = ""
+status = "not_checked"
+
 [rest]
 url = "http://127.0.0.1:8765"
 username = ""

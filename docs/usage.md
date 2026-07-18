@@ -93,6 +93,14 @@ PAM_OS_AUTH_PASSWORD
 安装后的每个客户端 skill 都读取自己的 `config.toml`：
 
 ```toml
+[versions]
+skill = "0.4.2"
+api = "v1"
+server = "0.4.2"
+server_api = "v1"
+server_checked_at = "2026-07-18T00:00:00Z"
+status = "match"
+
 [rest]
 url = "http://127.0.0.1:8765"
 username = ""
@@ -302,19 +310,19 @@ docker run -d --name pam-os \
 ## 11. 安装 Agent 集成
 
 ```bash
-./scripts/install-plugin.sh --codex --yes
-./scripts/install-plugin.sh --claude --yes
-./scripts/install-plugin.sh --opencode --yes
-./scripts/install-plugin.sh --hermes --yes
+./scripts/install.sh --codex --yes
+./scripts/install.sh --claude --yes
+./scripts/install.sh --opencode --yes
+./scripts/install.sh --hermes --yes
 ```
 
-本地 checkout：
+Windows 使用 `scripts/install.ps1`，参数相同。本地 checkout：
 
 ```bash
-./scripts/install-plugin-local.sh
+./scripts/install.sh --repo-dir "$PWD" --yes
 ```
 
-安装器只写 REST 配置。重装或升级时会先读取已有 skill 配置，把 URL、用户名、密码和超时作为默认值；交互模式不会明文回显旧密码。命令行参数和 `PAM_OS_REST_*` 环境变量优先于已有配置。Unix 下配置权限设为 `0600`，Windows 下移除继承 ACL 并仅授予当前用户访问。
+安装器同时处理首次安装和更新；未指定目标时会自动识别已有集成。它会读取已有 skill 配置，把 URL、用户名、密码和超时作为默认值，刷新托管 checkout，并把 skill/API 版本、服务端版本、探测时间和匹配状态写入配置。交互模式不会明文回显旧密码。命令行参数和 `PAM_OS_REST_*` 环境变量优先于已有配置。Unix 下配置权限设为 `0600`，Windows 下移除继承 ACL 并仅授予当前用户访问。
 
 ## 12. 开发接口
 

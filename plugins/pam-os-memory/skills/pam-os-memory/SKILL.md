@@ -12,6 +12,14 @@ PAM-OS is accessed only through its REST API. Use it as a pre-answer read layer 
 Read `config.toml` from this skill directory before every PAM-OS operation.
 
 ```toml
+[versions]
+skill = "0.4.2"
+api = "v1"
+server = "0.4.2"
+server_api = "v1"
+server_checked_at = "2026-07-18T00:00:00Z"
+status = "match"
+
 [rest]
 url = "http://127.0.0.1:8765"
 username = ""
@@ -21,12 +29,25 @@ timeout_seconds = 10
 
 Rules:
 
+- Treat `[versions]` as installation diagnostics. `skill` and `api` identify this installed client; the installer probes the configured REST service and records the observed `server`, `server_api`, check time, and comparison `status`.
+- Before the first memory operation in a turn, call `GET /v1/meta` and compare its `version` and `api_version` with `[versions]`. The live response is authoritative because the installation snapshot can become stale.
+- If `/v1/meta` returns 404, call `GET /openapi.json`. A server whose OpenAPI version starts with `0.3.` and exposes the required unversioned routes may use the legacy compatibility mapping below. Report one concise version warning before substantive output, including both skill and server versions.
+- Do not silently use a different or unknown API. For authentication failures, unreachable services, malformed metadata, or an unsupported API generation, report the version-check failure and stop PAM-OS operations.
 - `rest.url` is required. Remove any trailing slash before joining endpoint paths.
 - If both `username` and `password` are non-empty, send HTTP Basic Auth on every protected request.
 - If either credential field is empty, do not send an Authorization header.
 - Use HTTPS whenever the server is not bound to localhost.
 - If the config is missing, invalid, or the API is unreachable, report that PAM-OS REST must be configured or started. Do not fall back to a local command.
 - Use short connect and total timeouts. Do not automatically retry write requests unless the server supports an idempotency key.
+
+## Legacy v0.3 Compatibility
+
+The canonical routes below are required for v1 servers. When live discovery identifies a `0.3.x` server with unversioned OpenAPI routes, use the same routes without `/v1`. Two legacy operations also use query parameters instead of a JSON body:
+
+- search: `GET /memories/search?q=...&limit=...&type=...&min_importance=...&min_confidence=...`
+- should use memory: `GET /memory/should-use?task=...&conversation_summary=...`
+
+URL-encode every query parameter. Do not send the removed `user_id` or `X-PAM-OS-User` selectors. All other listed v1 request bodies are unchanged on the supported v0.3 compatibility path. This fallback is a migration aid; recommend upgrading the server so `[versions].status` becomes `match`.
 
 ## REST Operations
 

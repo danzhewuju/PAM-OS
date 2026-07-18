@@ -92,9 +92,17 @@ curl -sS -X POST http://127.0.0.1:8765/v1/memory/capture \
 
 ## Plugin 与 Skill
 
-`pam-os-memory` skill 负责告诉 Codex、Claude Code、OpenCode 和 Hermes 什么时候读取、写入和观察记忆。配置文件只保留 REST 参数：
+`pam-os-memory` skill 负责告诉 Codex、Claude Code、OpenCode 和 Hermes 什么时候读取、写入和观察记忆。配置文件会记录已安装的 skill/API 版本、安装时探测到的服务端版本，以及 REST 参数：
 
 ```toml
+[versions]
+skill = "0.4.2"
+api = "v1"
+server = "0.4.2"
+server_api = "v1"
+server_checked_at = "2026-07-18T00:00:00Z"
+status = "match"
+
 [rest]
 url = "http://127.0.0.1:8765"
 username = ""
@@ -105,22 +113,22 @@ timeout_seconds = 10
 远程安装：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install-plugin.sh | bash
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install.sh | bash
 ```
 
 从当前 checkout 安装：
 
 ```bash
-scripts/install-plugin-local.sh
+./scripts/install.sh --repo-dir "$PWD" --yes
 ```
 
 Windows PowerShell：
 
 ```powershell
-.\scripts\install-plugin-local.ps1
+.\scripts\install.ps1 --repo-dir $PWD --yes
 ```
 
-安装器会优先读取已有 skill 的 REST URL、用户名、密码和超时配置，并把它们作为默认值。交互安装会展示旧 URL 和用户名，密码只显示“已配置/未配置”，直接回车即可沿用；命令行参数和 `PAM_OS_REST_*` 环境变量优先级更高。安装器会在支持的平台上限制凭据配置文件权限。远程服务必须使用 HTTPS，并避免把密码直接写进 shell 历史。
+两个平台安装器同时负责首次安装和更新。未指定目标时，它们会自动识别已有集成并更新全部已安装目标；首次安装则交互选择目标，或在使用 `--yes` 时默认安装 Codex。安装器会沿用已有 skill 的 REST URL、用户名、密码和超时，刷新托管 checkout，探测服务端元数据，并写入可观测的版本快照。命令行参数和 `PAM_OS_REST_*` 环境变量优先级更高。安装器会在支持的平台上限制凭据配置文件权限。远程服务必须使用 HTTPS，并避免把密码直接写进 shell 历史。
 
 ## REST API
 
@@ -236,10 +244,10 @@ uv run pytest
 
 ## 更新
 
-通过 `GET /v1/meta` 查看运行版本，然后更新托管 checkout 并重装集成：
+再次运行同一个安装器即可。它会识别已有目标、更新托管 checkout、重装集成，并刷新 skill/服务端版本快照：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/update.sh | bash
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install.sh | bash
 ```
 
 ## License
