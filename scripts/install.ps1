@@ -396,11 +396,15 @@ function Find-PluginSource {
 }
 
 function Find-SkillSource {
-    foreach ($candidate in @(
+    $candidates = @(
         (Join-PathMany @($script:RepoDir, "skills", $PluginName)),
-        (Join-PathMany @($script:RepoDir, "plugins", $PluginName, "skills", $PluginName)),
-        (Join-PathMany @($script:SourceDir, "skills", $PluginName))
-    )) {
+        (Join-PathMany @($script:RepoDir, "plugins", $PluginName, "skills", $PluginName))
+    )
+    if (-not [string]::IsNullOrWhiteSpace($script:SourceDir)) {
+        $candidates += Join-PathMany @($script:SourceDir, "skills", $PluginName)
+    }
+
+    foreach ($candidate in $candidates) {
         if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath (Join-Path $candidate "SKILL.md") -PathType Leaf)) {
             return Resolve-AbsolutePath $candidate
         }

@@ -195,6 +195,33 @@ def test_powershell_installer_reuses_existing_rest_config(tmp_path: Path) -> Non
     _assert_reused_config(result, config_path)
 
 
+def test_powershell_installer_uses_repo_skill_without_source(tmp_path: Path) -> None:
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is not available")
+    skill_dir = tmp_path / "claude-skill"
+    _write_existing_config(skill_dir)
+    args = [
+        "--claude",
+        "--yes",
+        "--repo-dir",
+        str(ROOT),
+        "--claude-skill-dir",
+        str(skill_dir),
+        "--no-refresh",
+        "--skip-version-check",
+    ]
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-File", str(ROOT / "scripts" / "install.ps1"), *args],
+        cwd=ROOT,
+        env=_rest_env(),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    _assert_reused_config(result, skill_dir / "config.toml")
+
+
 def test_bash_installer_records_legacy_server_version_mismatch(tmp_path: Path) -> None:
     bash = _find_bash()
     if bash is None:
