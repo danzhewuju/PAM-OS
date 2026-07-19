@@ -1,164 +1,161 @@
 <div align="center">
   <h1>PAM-OS</h1>
-  <p><strong>Personal AI Memory OS: a local-first, REST-only memory runtime for AI agents.</strong></p>
+  <p><strong>Personal AI Memory OS — a local-first memory service for AI assistants and coding agents.</strong></p>
   <p>
     <a href="README.zh-CN.md">简体中文</a> ·
-    <a href="docs/usage.md">Documentation</a> ·
+    <a href="docs/usage.md">Usage guide</a> ·
     <a href="https://github.com/danzhewuju/PAM-OS">GitHub</a>
   </p>
   <p>
-    <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-blue" /></a>
-    <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB" />
-    <img alt="SQLite" src="https://img.shields.io/badge/SQLite-local--first-003B57" />
-    <img alt="REST" src="https://img.shields.io/badge/REST-required-009688" />
+    <a href="LICENSE"><img alt="Apache-2.0 license" src="https://img.shields.io/badge/License-Apache_2.0-blue" /></a>
+    <img alt="Python 3.11+" src="https://img.shields.io/badge/Python-3.11%2B-3776AB" />
+    <img alt="FastAPI" src="https://img.shields.io/badge/API-FastAPI-009688" />
+    <img alt="SQLite" src="https://img.shields.io/badge/Storage-SQLite-003B57" />
   </p>
 </div>
 
 ---
 
-PAM-OS gives assistants a durable memory service they can call before and after a task. It stores raw events, extracts structured memories, retrieves relevant context, consolidates stable profile traits, learns when memory should be used, and returns prompt-ready context packages through a versioned REST API.
+PAM-OS gives an AI client durable personal memory behind a versioned REST API. It can capture stable facts and preferences, retrieve relevant memories before a task, consolidate repeated evidence into profile traits, and learn signals that influence when memory should be read or written.
+
+The current project is a single-user, single-database service. Data is stored in a user-controlled SQLite file, and the default implementation runs locally without an external model or vector database.
 
 ```text
-AI client / skill
-  -> PAM-OS REST API (/v1)
-  -> PersonalMemoryRuntime
-  -> Adaptive policy + provider pipeline
-  -> SQLite MemoryStore
-  -> Context package / capture result / profile
+AI client / pam-os-memory skill
+              |
+              v
+       FastAPI REST API (/v1)
+              |
+              v
+     PersonalMemoryRuntime
+       |       |       |
+    policy  retrieval  extraction
+       |       |       |
+              v
+        SQLite MemoryStore
 ```
 
 ![PAM-OS memory architecture](docs/diagrams/memory-architecture.svg)
 
-## Why PAM-OS?
+## What is included
 
-- **Local-first storage**: one personal SQLite database, controlled by the user.
-- **REST-only integration**: clients use one stable HTTP boundary instead of local process execution.
-- **Prompt-ready retrieval**: `prepare` decides whether memory is needed and returns budgeted context.
-- **Selective capture**: stable preferences, goals, project decisions, style guidance, and corrections are retained while transient chat is skipped.
-- **Profile consolidation**: repeated evidence and behavior choices can become stable profile traits.
-- **Adaptive policy memory**: learned signals improve when PAM-OS reads, captures, or suppresses memory.
-- **Replaceable providers**: policy, extraction, retrieval, reranking, and consolidation remain protocol-agnostic behind the REST service.
+- A FastAPI service with canonical `/v1` endpoints.
+- SQLite storage with WAL mode, foreign keys, FTS5 when available, and a non-FTS search fallback.
+- Rule-based memory extraction, retrieval, reranking, adaptive read/write policy, and profile consolidation.
+- Prompt-ready context preparation with result and character budgets.
+- Optional HTTP Basic Auth for protected endpoints.
+- A `pam-os-memory` skill/plugin package for Codex, Claude Code, OpenCode, and Hermes.
+- Docker packaging and cross-platform agent-integration installers.
 
-## Quick Start
+## Current scope
+
+- PAM-OS is a personal memory service, not a multi-tenant authorization system. Run a separate instance and database for each user.
+- REST is the product boundary. The repository does not provide a `pam-os` product CLI.
+- `scripts/` intentionally contains only the two platform installers: `install.sh` and `install.ps1`.
+- Quality evaluation is available as the Python development API `pam_os.quality.evaluate_quality_cases`; it is not a standalone command or script.
+- Rule-based extraction is the server default. The LLM extractor is an injectable Python provider and falls back to rules; the REST server does not create an LLM client from configuration alone.
+
+## Quick start
 
 Requirements:
 
 - Python 3.11 or newer
-- SQLite with FTS5 when available
-- `uv` recommended
+- [uv](https://docs.astral.sh/uv/) (recommended)
 
-Install dependencies and start the API:
+Install the package and start the API from the repository root:
 
 ```bash
 uv sync
-export PAM_OS_DB="$HOME/.pam-os/memory.sqlite3"
 uv run python -m uvicorn pam_os.api:create_app --factory --host 127.0.0.1 --port 8765
 ```
 
-Check liveness and API metadata:
+Unless configured otherwise, PAM-OS creates its database at `~/.pam-os/memory.sqlite3`.
+
+Verify the service:
 
 ```bash
-curl http://127.0.0.1:8765/health/live
-curl http://127.0.0.1:8765/v1/meta
+curl -sS http://127.0.0.1:8765/health/live
+curl -sS http://127.0.0.1:8765/v1/meta
 ```
 
-The interactive OpenAPI documentation is available at `http://127.0.0.1:8765/docs`.
+Swagger UI is available at `http://127.0.0.1:8765/docs`.
 
-## Recommended Agent Workflow
+## Basic memory loop
 
-Prepare memory context before a history-dependent task:
+Prepare relevant context before a history-dependent task:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8765/v1/context/prepare \
   -H 'Content-Type: application/json' \
-  -d '{"task":"Plan the next PAM-OS milestone based on my preferences.","force":false}'
+  -d '{"task":"Continue the project using my previous decisions.","force":false}'
 ```
 
-Observe the completed turn after a substantial answer:
+Observe a completed substantial turn so stable information can be captured and policy signals can be learned:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8765/v1/turns/observe \
   -H 'Content-Type: application/json' \
-  -d '{"user_message":"I prefer local-first systems.","assistant_message":"Understood.","auto_capture":true,"auto_learn_policy":true}'
+  -d '{"user_message":"I prefer local-first tools.","assistant_message":"I will keep the design local-first.","auto_capture":true,"auto_learn_policy":true}'
 ```
 
-Use direct capture for explicit remember/import requests:
+Use direct capture when the user explicitly asks the agent to remember something:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8765/v1/memory/capture \
   -H 'Content-Type: application/json' \
-  -d '{"content":"The user prefers local-first, lightweight, controllable designs.","source":"assistant","force":true}'
+  -d '{"content":"The user prefers local-first, lightweight tools.","source":"assistant","force":true}'
 ```
 
-## Plugin and Skill
-
-The packaged `pam-os-memory` skill tells Codex, Claude Code, OpenCode, and Hermes when to prepare, capture, and observe memory. Its `config.toml` records the installed skill/API versions, the server version observed during installation, and the REST client settings:
-
-```toml
-[versions]
-skill = "0.4.2"
-api = "v1"
-server = "0.4.2"
-server_api = "v1"
-server_checked_at = "2026-07-18T00:00:00Z"
-status = "match"
-
-[rest]
-url = "http://127.0.0.1:8765"
-username = ""
-password = ""
-timeout_seconds = 10
-```
-
-Install from GitHub:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install.sh | bash
-```
-
-Install from the current checkout:
-
-```bash
-./scripts/install.sh --repo-dir "$PWD" --yes
-```
-
-Windows PowerShell:
-
-```powershell
-.\scripts\install.ps1 --repo-dir $PWD --yes
-```
-
-The two platform installers handle both first install and update. With no target flags they detect existing integrations and update all installed targets; otherwise a first install selects targets interactively or defaults to Codex with `--yes`. The installer reuses an existing skill's REST URL, username, password, and timeout, refreshes the managed checkout, probes server metadata, and writes an observable version snapshot. Explicit command-line options and `PAM_OS_REST_*` environment variables take precedence. REST credentials are written with restrictive file permissions where supported. For remote servers, use HTTPS and avoid passing passwords in shell history.
+See [docs/usage.md](docs/usage.md) for request examples, response behavior, validation rules, and the recommended agent workflow.
 
 ## REST API
 
-Canonical endpoints use the `/v1` prefix. Unversioned paths from v0.3 remain as hidden compatibility aliases for one migration window.
+`GET /health/live` is public. When Basic Auth is enabled, all other product endpoints require authentication.
 
-| Method | Path | Purpose |
+| Method | Endpoint | Purpose |
 | --- | --- | --- |
-| `GET` | `/health/live` | Public process liveness. |
-| `GET` | `/v1/health/ready` | Authenticated database readiness. |
-| `GET` | `/v1/meta` | Runtime and API version metadata. |
-| `POST` | `/v1/events` | Add a raw event and optionally extract memories. |
+| `GET` | `/v1/health/ready` | Check database readiness. |
+| `GET` | `/v1/meta` | Read runtime and API versions. |
+| `POST` | `/v1/events` | Store a raw event and optionally extract memories. |
 | `POST` | `/v1/memories/search` | Search memories with type and score filters. |
-| `POST` | `/v1/memory/should-use` | Decide whether a task should use memory. |
-| `POST` | `/v1/context/prepare` | Prepare prompt-ready memory context. |
+| `POST` | `/v1/memory/should-use` | Decide whether a task should read memory. |
+| `POST` | `/v1/context/prepare` | Return a policy-gated, prompt-ready context package. |
 | `POST` | `/v1/memory/capture` | Selectively capture stable memory. |
-| `POST` | `/v1/behavior/choice` | Record behavior evidence. |
-| `POST` | `/v1/turns/observe` | Observe a completed chat turn. |
+| `POST` | `/v1/behavior/choice` | Record chosen, rejected, or deferred options. |
+| `POST` | `/v1/turns/observe` | Observe a completed conversation turn. |
 | `POST` | `/v1/memory/consolidate` | Consolidate evidence into profile traits. |
-| `GET` | `/v1/profile` | Read profile traits. |
-| `POST` | `/v1/context/compile` | Compile context directly from retrieval. |
+| `GET` | `/v1/profile` | Query profile traits. |
+| `POST` | `/v1/context/compile` | Retrieve and compile context without policy gating. |
 | `POST` | `/v1/reflect` | Build context from recent memories. |
 | `GET` | `/v1/storage/stats` | Read storage diagnostics. |
-| `GET` | `/v1/memory/inspect` | Inspect memory tables and traces. |
+| `GET` | `/v1/memory/inspect` | Inspect stored records and quality traces. |
 | `POST` | `/v1/memory/clear` | Clear all memory after explicit confirmation. |
 
-Request models reject unknown fields, reject oversized request bodies, and constrain text sizes, scores, and result limits. API validation and runtime/storage failures return structured error payloads.
+Unversioned v0.3 routes remain as hidden compatibility aliases for migration. New clients should use `/v1` only.
 
-## Security Model
+## Configuration
 
-PAM-OS v0.4 is a personal, single-database service. Client-supplied tenant IDs were removed because they did not constitute an authorization boundary.
+Copy the complete example before starting the service:
+
+```bash
+cp config/pam-os.example.toml config/pam-os.toml
+```
+
+PAM-OS loads `config/pam-os.toml` from the current working directory by default. `PAM_OS_CONFIG` can point to another file. Supported environment overrides are:
+
+```text
+PAM_OS_DB
+PAM_OS_CONFIG
+PAM_OS_HOST
+PAM_OS_PORT
+PAM_OS_AUTH_ENABLED
+PAM_OS_AUTH_USERNAME
+PAM_OS_AUTH_PASSWORD
+```
+
+Environment variables override TOML values, which override built-in defaults. When starting Uvicorn manually, its `--host` and `--port` arguments control the actual listener; the Docker image reads `PAM_OS_HOST` and `PAM_OS_PORT` for those arguments.
+
+### Authentication and remote access
 
 Enable Basic Auth in `config/pam-os.toml`:
 
@@ -171,86 +168,91 @@ auth_username = "user"
 auth_password = "change-me"
 ```
 
-Or use environment variables:
+Or use the corresponding `PAM_OS_AUTH_*` environment variables. If the service is reachable beyond localhost, place it behind HTTPS or a trusted private network. Basic Auth credentials must not be sent over public plain HTTP.
+
+## Agent integration
+
+The installers configure the `pam-os-memory` integration; they do not install or run the REST service itself. Start or deploy PAM-OS first, then install the integration for the clients you use.
+
+From the current checkout on macOS or Linux:
 
 ```bash
-export PAM_OS_AUTH_ENABLED=true
-export PAM_OS_AUTH_USERNAME=user
-export PAM_OS_AUTH_PASSWORD=change-me
+./scripts/install.sh --codex --repo-dir "$PWD" --yes
 ```
 
-Basic Auth must be protected by HTTPS when the service is reachable beyond localhost. Put PAM-OS behind a TLS reverse proxy or private network; do not expose plain HTTP credentials to the public internet.
+Supported targets are `codex`, `claude`, `opencode`, and `hermes`. Use another target flag, repeat `--target`, or pass `--all` as needed:
 
-## SQLite and Concurrency
+```bash
+./scripts/install.sh --all --repo-dir "$PWD" --yes
+```
 
-The REST service opens short-lived SQLite connections, enables foreign keys, uses a busy timeout, and initializes the database in WAL mode. This supports normal personal-agent concurrency while keeping the storage model lightweight.
+Windows PowerShell uses the same long options:
+
+```powershell
+.\scripts\install.ps1 --codex --repo-dir $PWD --yes
+```
+
+To install or update from GitHub on macOS/Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install.sh | bash
+```
+
+Run `./scripts/install.sh --help` or `.\scripts\install.ps1 --help` for all destination, REST connection, update, and non-interactive options. Existing installations reuse their REST settings unless explicit options or `PAM_OS_REST_*` variables override them.
 
 ## Docker
+
+Build and run a local instance:
 
 ```bash
 docker build -t pam-os .
 docker volume create pam-os-data
 docker run -d --name pam-os \
-  -p 8765:8765 \
+  -p 127.0.0.1:8765:8765 \
   -v pam-os-data:/data \
-  -e PAM_OS_AUTH_ENABLED=true \
-  -e PAM_OS_AUTH_USERNAME=user \
-  -e PAM_OS_AUTH_PASSWORD=change-me \
   pam-os
 ```
 
-The container runs the ASGI factory directly and stores data at `/data/memory.sqlite3`.
+The container stores its database at `/data/memory.sqlite3` and exposes the API on port `8765`. Add `PAM_OS_AUTH_*` environment variables and TLS at the deployment boundary before allowing remote access.
 
-## Configuration
-
-Copy the example configuration:
-
-```bash
-cp config/pam-os.example.toml config/pam-os.toml
-```
-
-Environment variables override `config/pam-os.toml`, which overrides built-in defaults:
-
-```bash
-export PAM_OS_DB="$HOME/.pam-os/memory.sqlite3"
-export PAM_OS_CONFIG="/path/to/pam-os.toml"
-export PAM_OS_HOST="0.0.0.0"
-export PAM_OS_PORT="8765"
-```
-
-See [config/pam-os.example.toml](config/pam-os.example.toml) for all runtime, context, consolidation, retrieval, extraction, and provider settings.
-
-## Project Structure
+## Repository layout
 
 ```text
-src/pam_os/
-  api.py             # REST API, request validation, auth, health, errors
-  runtime.py         # protocol-agnostic memory runtime
-  store.py           # SQLite schema, writes, retrieval, inspection
-  orchestrator.py    # policy, retrieval, reranking, and context budgets
-  providers.py       # replaceable provider interfaces
-  adaptive_policy.py # learned signals plus rule fallback
-  rule_provider.py   # default local providers
-  extractor.py       # rule-based extraction
-  context.py         # prompt-ready context compiler
+src/pam_os/                 REST API and memory runtime
+skills/pam-os-memory/       Standalone agent skill package
+plugins/pam-os-memory/      Codex plugin package
+scripts/install.sh          macOS/Linux installer and updater
+scripts/install.ps1         Windows installer and updater
+config/pam-os.example.toml  Complete server configuration example
+tests/                      Runtime, API, installer, and version tests
+eval/                       Quality-evaluation case data
+docs/                       Usage, architecture, and design documents
+```
+
+Important runtime modules:
+
+```text
+api.py               FastAPI routes, auth, validation, and error handling
+runtime.py           Protocol-agnostic PersonalMemoryRuntime
+store.py             SQLite schema, persistence, retrieval, and inspection
+orchestrator.py      Policy, retrieval, reranking, and context budgeting
+adaptive_policy.py   Learned policy signals with rule-based fallback
+adaptive_learning.py Turn observation and policy-learning loop
+rule_provider.py     Default local policy, reranker, and consolidator
+extractor.py         Default rule-based memory extractor
+context.py           Prompt-ready context compiler
 ```
 
 ## Development
+
+Install development dependencies and run the test suite:
 
 ```bash
 uv sync --extra dev
 uv run pytest
 ```
 
-Quality evaluation remains a Python development API through `pam_os.quality.evaluate_quality_cases`; it is not exposed as a product command.
-
-## Update
-
-Run the same installer again. It detects existing targets, updates the managed checkout, reinstalls integrations, and refreshes the skill/server version snapshot:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/danzhewuju/PAM-OS/refs/heads/master/scripts/install.sh | bash
-```
+The tests cover the memory lifecycle, adaptive policy, profile consolidation, REST validation and authentication, both platform installers, and version consistency.
 
 ## License
 
