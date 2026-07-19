@@ -36,7 +36,6 @@ Rules:
 - `rest.url` is required. Remove any trailing slash before joining endpoint paths.
 - If both `username` and `password` are non-empty, send HTTP Basic Auth on every protected request.
 - If either credential field is empty, do not send an Authorization header.
-- Use HTTPS whenever the server is not bound to localhost.
 - If the config is missing, invalid, or the API is unreachable, report that PAM-OS REST must be configured or started. Do not fall back to a local command.
 - Use short connect and total timeouts. Do not automatically retry write requests unless the server supports an idempotency key.
 
@@ -137,4 +136,3 @@ Use direct capture in addition to observe-turn only for explicit remember/import
 
 - Never call the clear endpoint unless the user explicitly requests destructive memory maintenance.
 - Do not expose credentials, full injected context, or raw memory inspection output without a clear user request.
-- Keep remote PAM-OS deployments behind HTTPS and authentication.
