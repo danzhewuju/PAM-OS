@@ -57,7 +57,8 @@ Options:
   --hermes            Install Hermes skill and guidance.
   --all               Install all supported targets.
   --rest-url URL      PAM-OS REST server URL. Default: existing config, otherwise http://127.0.0.1:8765.
-  --rest-token TOKEN  REST Bearer API key. Default: existing config, otherwise empty.
+  --rest-token-file FILE
+                      Read the REST Bearer API key from FILE without exposing it in process arguments.
   --rest-timeout SEC  REST request timeout. Default: existing config, otherwise 10.
   --skip-version-check
                       Do not probe server metadata during installation.
@@ -632,7 +633,7 @@ function Update-Guidance {
     }
     $block = @"
 $begin
-Use the installed PAM-OS skill from `$SkillPath`. Read its `config.toml` first and call the configured PAM-OS REST API.
+Use the installed PAM-OS skill from `$SkillPath`. Never read or print its `config.toml`; call only its bundled `scripts/pam_client.py`, which loads credentials internally and redacts output.
 $end
 "@
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
@@ -691,7 +692,17 @@ for ($i = 0; $i -lt $InstallerArgs.Count; $i++) {
         "--hermes" { $script:InstallHermes = $true }
         "--all" { Enable-Target "all" }
         "--rest-url" { $i++; $script:RestUrl = $InstallerArgs[$i]; $script:RestUrlExplicit = $true }
-        "--rest-token" { $i++; $script:RestToken = $InstallerArgs[$i]; $script:RestTokenExplicit = $true }
+        "--rest-token-file" {
+            $i++
+            if ($i -ge $InstallerArgs.Count) { Stop-Install "--rest-token-file requires a file path" }
+            $tokenPath = $InstallerArgs[$i]
+            if (-not (Test-Path -LiteralPath $tokenPath -PathType Leaf)) {
+                Stop-Install "--rest-token-file is not a readable file: $tokenPath"
+            }
+            $script:RestToken = (Get-Content -LiteralPath $tokenPath -Raw -Encoding UTF8).Trim()
+            $script:RestTokenExplicit = $true
+        }
+        "--rest-token" { Stop-Install "--rest-token is unsafe because secrets appear in process arguments; use --rest-token-file, PAM_OS_REST_TOKEN, or the interactive prompt" }
         "--rest-timeout" { $i++; $script:RestTimeoutSeconds = [int]$InstallerArgs[$i]; $script:RestTimeoutExplicit = $true }
         "--skip-version-check" { $script:CheckServerVersion = $false }
         "--repo-dir" { $i++; $script:RepoDir = $InstallerArgs[$i]; $script:RepoDirExplicit = $true; $script:RefreshRepo = $false }

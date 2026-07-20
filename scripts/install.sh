@@ -18,6 +18,7 @@ DEFAULT_HERMES_SKILL_DIR="$DEFAULT_HERMES_HOME/skills/$PLUGIN_NAME"
 LEGACY_SERVER_NAME="pam_os_memory"
 EXPECTED_API_VERSION="v2"
 VERSION_CHECK_TIMEOUT_SECONDS=3
+PYTHON_BIN=""
 
 info() {
   printf '\033[1;34m==>\033[0m %s\n' "$*" >&2
@@ -47,7 +48,8 @@ Options:
   --hermes            Install Hermes skill and guidance.
   --all               Install all supported targets.
   --rest-url URL      PAM-OS REST server URL. Default: existing config, otherwise http://127.0.0.1:8765.
-  --rest-token TOKEN  REST Bearer API key. Default: existing config, otherwise empty.
+  --rest-token-file FILE
+                      Read the REST Bearer API key from FILE without exposing it in process arguments.
   --rest-timeout SEC  REST request timeout. Default: existing config, otherwise 10.
   --skip-version-check
                       Do not probe server metadata during installation.
@@ -465,10 +467,33 @@ EOF
   chmod 600 "$path"
 }
 
+resolve_python() {
+  local candidate
+  local -a candidates=()
+  [[ -z "${PAM_OS_PYTHON:-}" ]] || candidates+=("$PAM_OS_PYTHON")
+  [[ -z "${VIRTUAL_ENV:-}" ]] || candidates+=(
+    "$VIRTUAL_ENV/bin/python"
+    "$VIRTUAL_ENV/Scripts/python.exe"
+  )
+  candidates+=(
+    "$REPO_DIR/.venv/bin/python"
+    "$REPO_DIR/.venv/Scripts/python.exe"
+    python3
+    python
+  )
+  for candidate in "${candidates[@]}"; do
+    if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+      PYTHON_BIN="$candidate"
+      return 0
+    fi
+  done
+  die "Python 3.11 or newer is required"
+}
+
 read_skill_version() {
   local manifest="$REPO_DIR/plugins/$PLUGIN_NAME/.codex-plugin/plugin.json"
   [[ -f "$manifest" ]] || die "Plugin manifest not found: $manifest"
-  python3 - "$manifest" <<'PY'
+  "$PYTHON_BIN" - "$manifest" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -497,7 +522,7 @@ probe_server_version() {
     PAM_OS_PROBE_TIMEOUT="$VERSION_CHECK_TIMEOUT_SECONDS" \
     PAM_OS_SKILL_VERSION="$SKILL_VERSION" \
     PAM_OS_EXPECTED_API="$EXPECTED_API_VERSION" \
-      python3 - <<'PY'
+      "$PYTHON_BIN" - <<'PY'
 import json
 import os
 from urllib.error import HTTPError, URLError
@@ -607,7 +632,7 @@ write_bundled_skill_config() {
 
 write_marketplace_config() {
   local path="$1"
-  python3 - "$path" "$PLUGIN_NAME" <<'PY'
+  "$PYTHON_BIN" - "$path" "$PLUGIN_NAME" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -640,7 +665,7 @@ PY
 
 remove_legacy_codex_config() {
   local path="$1"
-  python3 - "$path" "$LEGACY_SERVER_NAME" <<'PY'
+  "$PYTHON_BIN" - "$path" "$LEGACY_SERVER_NAME" <<'PY'
 import sys
 from pathlib import Path
 
@@ -688,7 +713,7 @@ append_guidance() {
   local begin="<!-- PAM-OS MEMORY BEGIN -->"
   local end="<!-- PAM-OS MEMORY END -->"
   mkdir -p "$(dirname "$path")"
-  python3 - "$path" "$skill_path" "$begin" "$end" <<'PY'
+  "$PYTHON_BIN" - "$path" "$skill_path" "$begin" "$end" <<'PY'
 import sys
 from pathlib import Path
 
@@ -701,7 +726,7 @@ while begin in existing and end in existing:
     existing = (existing[:start] + existing[finish:]).strip() + "\n"
 
 block = f"""{begin}
-Use the installed PAM-OS skill from `{skill_path}`. Read its `config.toml` first and call the configured PAM-OS REST API.
+Use the installed PAM-OS skill from `{skill_path}`. Never read or print its `config.toml`; call only its bundled `scripts/pam_client.py`, which loads credentials internally and redacts output.
 {end}
 """
 target.write_text(existing.rstrip() + "\n\n" + block if existing.strip() else block, encoding="utf-8")
@@ -763,7 +788,15 @@ while [[ $# -gt 0 ]]; do
     --hermes) INSTALL_HERMES=1; shift ;;
     --all) enable_target all; shift ;;
     --rest-url) REST_URL="${2:-}"; REST_URL_EXPLICIT=1; shift 2 ;;
-    --rest-token) REST_TOKEN="${2:-}"; REST_TOKEN_EXPLICIT=1; shift 2 ;;
+    --rest-token-file)
+      [[ -n "${2:-}" && -f "$2" ]] || die "--rest-token-file requires a readable file"
+      REST_TOKEN="$(< "$2")"
+      REST_TOKEN_EXPLICIT=1
+      shift 2
+      ;;
+    --rest-token)
+      die "--rest-token is unsafe because secrets appear in process arguments; use --rest-token-file, PAM_OS_REST_TOKEN, or the interactive prompt"
+      ;;
     --rest-timeout) REST_TIMEOUT_SECONDS="${2:-}"; REST_TIMEOUT_EXPLICIT=1; shift 2 ;;
     --skip-version-check) CHECK_SERVER_VERSION=0; shift ;;
     --repo-dir) REPO_DIR="${2:-}"; REPO_DIR_EXPLICIT=1; REFRESH_REPO=0; shift 2 ;;
@@ -818,6 +851,7 @@ configure_rest_runtime
 [[ "$REST_TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$REST_TIMEOUT_SECONDS" -gt 0 ]] || die "--rest-timeout must be a positive integer."
 
 resolve_repo_dir
+resolve_python
 SKILL_VERSION="$(read_skill_version)"
 probe_server_version
 PLUGIN_SOURCE="$(find_plugin_source || true)"

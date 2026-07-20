@@ -93,6 +93,7 @@ def _assert_reused_config(result: subprocess.CompletedProcess[str], config_path:
     assert f'url = "{EXISTING_URL}"' in installed
     assert f'token = "{toml_string(EXISTING_TOKEN)}"' in installed
     assert f"timeout_seconds = {EXISTING_TIMEOUT}" in installed
+    assert (config_path.parent / "scripts" / "pam_client.py").is_file()
     config = tomllib.loads(installed)
     assert config["versions"] == {
         "skill": PROJECT_VERSION,
@@ -102,6 +103,16 @@ def _assert_reused_config(result: subprocess.CompletedProcess[str], config_path:
         "server_checked_at": "",
         "status": "not_checked",
     }
+
+
+def test_installers_do_not_advertise_inline_token_arguments() -> None:
+    bash = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+    powershell = (ROOT / "scripts" / "install.ps1").read_text(encoding="utf-8")
+
+    assert "--rest-token TOKEN" not in bash
+    assert "--rest-token TOKEN" not in powershell
+    assert "--rest-token-file FILE" in bash
+    assert "--rest-token-file FILE" in powershell
 
 
 @contextmanager

@@ -1,6 +1,6 @@
 ---
 name: pam-os-memory
-description: Use PAM-OS as the user's REST-backed long-term memory for Codex and coding agents. Trigger when the user asks to continue prior work, refers to preferences, project history, previous decisions, goals, answer style, or asks to remember stable information. Also trigger before troubleshooting, debugging, analysis, optimization, fixes, or implementation in a known project. Treat "pamr" as an explicit read shortcut and "pamw" as an explicit write shortcut. After substantial turns, observe the completed turn so PAM-OS can conservatively learn durable memory and policy signals.
+description: Use PAM-OS as the user's REST-backed long-term memory for AI assistants and coding agents. Trigger when the user asks to continue prior work, refers to personal preferences, project history, previous decisions, long-term goals, answer style, or asks the assistant to remember stable information. Also trigger before troubleshooting, debugging, analysis, optimization, fixes, or implementation in a known project. Treat "pamr" as an explicit read shortcut and "pamw" as an explicit write shortcut. After substantial turns, observe the completed turn so PAM-OS can conservatively learn durable memory and policy signals.
 ---
 
 # PAM-OS Memory
@@ -9,13 +9,13 @@ PAM-OS is accessed only through its REST API. Use it as a pre-answer read layer 
 
 ## Configuration
 
-Read `config.toml` from this skill directory before every PAM-OS operation.
+For every PAM-OS operation, run the bundled `scripts/pam_client.py`. The client reads `config.toml` internally and is the only component allowed to handle credentials.
 
 ```toml
 [versions]
-skill = "0.5.0"
+skill = "0.5.1"
 api = "v2"
-server = "0.5.0"
+server = "0.5.1"
 server_api = "v2"
 server_checked_at = "2026-07-18T00:00:00Z"
 status = "match"
@@ -28,14 +28,26 @@ timeout_seconds = 10
 
 Rules:
 
+- Never open, print, search, or display `config.toml`. Never construct an Authorization header or pass a username, password, API key, or token in a shell command, tool argument, environment assignment, log, prompt, or handwritten HTTP request.
+- Do not use `curl`, `wget`, `Invoke-RestMethod`, or custom HTTP code for PAM-OS. If the bundled client is missing or fails, report the failure and stop PAM-OS operations; do not fall back.
+- Run the platform launcher from this skill directory: `& scripts/pam_client.ps1` in PowerShell or `scripts/pam_client.sh` in Bash. The launcher finds Python 3.11+ (or `uv`) without handling credentials. Run its `check` command before the first memory operation in a turn. This safely loads config, calls `/v2/meta`, and prints only redacted version diagnostics.
 - Treat `[versions]` as installation diagnostics. `skill` and `api` identify this installed client; the installer probes the configured REST service and records the observed `server`, `server_api`, check time, and comparison `status`.
-- Before the first memory operation in a turn, call `GET /v2/meta` and compare its `version` and `api_version` with `[versions]`. The live response is authoritative because the installation snapshot can become stale.
 - Do not silently use a different or unknown API. For authentication failures, unreachable services, malformed metadata, or an unsupported API generation, report the version-check failure and stop PAM-OS operations.
-- `rest.url` is required. Remove any trailing slash before joining endpoint paths.
-- Send `Authorization: Bearer <token>` on every protected request. The token fixes the authenticated user; never send a `user_id` selector.
-- If `token` is empty, report that a PAM-OS API key must be configured and stop protected operations.
+- The client requires `rest.url`, loads the user-bound Bearer token without exposing it, and never sends a `user_id` selector. It rejects credentials embedded in URLs, legacy username/password authentication, absolute request URLs, unknown routes, and non-local HTTP servers.
+- If the client reports that the API key is empty or that legacy credentials are configured, ask the user to install a v2 API key. Do not inspect the config to diagnose it.
 - If the config is missing, invalid, or the API is unreachable, report that PAM-OS REST must be configured or started. Do not fall back to a local command.
 - Use short connect and total timeouts. Do not automatically retry write requests unless the server supports an idempotency key.
+
+Invoke allowed operations through the client:
+
+```text
+PowerShell: & scripts/pam_client.ps1 check
+Bash:       scripts/pam_client.sh check
+PowerShell: & scripts/pam_client.ps1 request GET /v2/storage/stats
+Bash:       scripts/pam_client.sh request POST /v2/context/prepare --body-json <JSON>
+```
+
+Use `--body-file -` when the execution tool can supply stdin without embedding the body in the command. Request bodies never contain authentication data. The clear endpoint additionally requires `--allow-destructive` and explicit user approval.
 
 ## REST Operations
 
@@ -124,4 +136,5 @@ Use direct capture in addition to observe-turn only for explicit remember/import
 ## Safety
 
 - Never call the clear endpoint unless the user explicitly requests destructive memory maintenance.
+- Use only `scripts/pam_client.py` for authentication and REST transport. Its stdout and stderr redact configured secrets and sensitive response fields.
 - Do not expose credentials, full injected context, or raw memory inspection output without a clear user request.

@@ -91,13 +91,13 @@ PAM_OS_BOOTSTRAP_TOKEN
 
 ## 4. Skill 配置
 
-安装后的每个客户端 skill 都读取自己的 `config.toml`：
+安装后的每个客户端 skill 都带有自己的 `config.toml`，但大模型不得直接读取它。所有 REST 操作都通过同目录的安全客户端完成（PowerShell 使用 `scripts/pam_client.ps1`，Bash 使用 `scripts/pam_client.sh`），由客户端在进程内加载凭据：
 
 ```toml
 [versions]
-skill = "0.5.0"
+skill = "0.5.1"
 api = "v2"
-server = "0.5.0"
+server = "0.5.1"
 server_api = "v2"
 server_checked_at = "2026-07-18T00:00:00Z"
 status = "match"
@@ -111,11 +111,14 @@ timeout_seconds = 10
 规则：
 
 - `url` 必须存在。
-- 每个受保护请求发送 `Authorization: Bearer <token>`。
+- 大模型不得打印配置、拼接认证头或直接调用 `curl` / `Invoke-RestMethod`。
+- 安全客户端在进程内读取 Token 并发送认证头；命令参数和输出中不包含凭据。
 - Token 固定绑定用户；请求不得发送 `user_id` 或 `X-PAM-OS-User`。
 - 服务不在 localhost 时必须使用 HTTPS。
 - API 不可达时直接提示启动或配置服务，不回退到本地进程。
 - 写请求默认不自动重试，避免重复事件。
+
+安装时不要使用内联 Token 参数。使用安全交互输入、已有配置、由宿主安全注入的 `PAM_OS_REST_TOKEN`，或 `--rest-token-file`。
 
 ## 5. 推荐记忆循环
 

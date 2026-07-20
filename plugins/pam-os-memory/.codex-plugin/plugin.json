@@ -1,6 +1,6 @@
 {
   "name": "pam-os-memory",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Use PAM-OS local-first long-term memory from AI assistants and coding agents, including context prep for project troubleshooting, analysis, solving, optimization, and automatic post-answer capture of stable preferences and project decisions.",
   "author": {
     "name": "PAM-OS"

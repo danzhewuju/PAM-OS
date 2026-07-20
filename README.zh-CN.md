@@ -105,9 +105,9 @@ curl -sS -X POST http://127.0.0.1:8765/v2/memory/capture \
 
 ```toml
 [versions]
-skill = "0.5.0"
+skill = "0.5.1"
 api = "v2"
-server = "0.5.0"
+server = "0.5.1"
 server_api = "v2"
 server_checked_at = "2026-07-18T00:00:00Z"
 status = "match"
@@ -117,6 +117,8 @@ url = "http://127.0.0.1:8765"
 token = ""
 timeout_seconds = 10
 ```
+
+Skill 不允许大模型直接读取此配置或拼接认证请求。运行时统一通过内置的 `pam_client` 启动脚本在进程内加载 Token，并对输出和错误脱敏；非本机服务必须使用 HTTPS。
 
 远程安装：
 
