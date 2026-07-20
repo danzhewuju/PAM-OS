@@ -1,28 +1,40 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import secrets
 import sqlite3
+from typing import Any, Callable, Literal
 import uuid
-from pathlib import Path
-from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from pam_os.config import load_config
+from pam_os.config import control_db_path, data_dir, load_config
+from pam_os.identity import (
+    ADMIN_USERS,
+    API_KEYS_MANAGE,
+    DEFAULT_USER_SCOPES,
+    MEMORY_DELETE,
+    MEMORY_INSPECT,
+    MEMORY_READ,
+    MEMORY_WRITE,
+    ControlStore,
+    RequestContext,
+)
 from pam_os.runtime import PersonalMemoryRuntime
 from pam_os.serialization import to_plain
+from pam_os.tenancy import UserRuntimeFactory
 from pam_os.version import __version__
 
 
 logger = logging.getLogger(__name__)
-API_VERSION = "v1"
+API_VERSION = "v2"
 MAX_TEXT_CHARS = 100_000
 MAX_QUERY_CHARS = 10_000
 MAX_RESULT_LIMIT = 100
@@ -121,25 +133,82 @@ class ClearMemoryRequest(ApiRequest):
     confirm: bool = False
 
 
-def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
+class CreateUserRequest(ApiRequest):
+    username: str = Field(min_length=1, max_length=64)
+    display_name: str | None = Field(default=None, max_length=128)
+    principal_name: str = Field(default="default-agent", min_length=1, max_length=128)
+    scopes: list[str] = Field(default_factory=lambda: sorted(DEFAULT_USER_SCOPES), min_length=1)
+    expires_at: str | None = None
+
+
+class CreateApiKeyRequest(ApiRequest):
+    principal_name: str = Field(min_length=1, max_length=128)
+    scopes: list[str] = Field(default_factory=lambda: sorted(DEFAULT_USER_SCOPES), min_length=1)
+    expires_at: str | None = None
+
+
+def create_app(
+    config=None,
+    *,
+    data_root: Path | str | None = None,
+    control_store: ControlStore | None = None,
+    runtime_factory: UserRuntimeFactory | None = None,
+) -> FastAPI:
     config = config or load_config()
-    if config.server.auth_enabled and (not config.server.auth_username or not config.server.auth_password):
-        raise RuntimeError("REST API auth is enabled, but server.auth_username or server.auth_password is missing")
-    if config.server.host not in {"127.0.0.1", "localhost", "::1"} and not config.server.auth_enabled:
-        logger.warning("PAM-OS is configured on a non-loopback host without REST authentication")
+    root = Path(data_root) if data_root is not None else data_dir(config)
+    control = control_store or ControlStore(root / "control.sqlite3" if data_root is not None else control_db_path(config))
+    runtimes = runtime_factory or UserRuntimeFactory(root, config)
+    bearer = HTTPBearer(auto_error=False)
 
-    runtime = PersonalMemoryRuntime(db_path=db_path, config=config)
-    security = HTTPBasic(auto_error=False)
+    if not config.server.bootstrap_token and control.user_count() == 0:
+        logger.warning(
+            "PAM-OS has no users and no bootstrap token; set PAM_OS_BOOTSTRAP_TOKEN to provision the first user"
+        )
+    elif config.server.bootstrap_token and control.user_count() > 0:
+        logger.warning("PAM_OS_BOOTSTRAP_TOKEN remains enabled after user provisioning; remove it when possible")
 
-    def require_auth(credentials: HTTPBasicCredentials | None = Depends(security)) -> None:
-        ensure_basic_auth(credentials, config.server.auth_enabled, config.server.auth_username, config.server.auth_password)
+    def authenticate(
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+    ) -> RequestContext:
+        if credentials is None or credentials.scheme.lower() != "bearer":
+            raise_auth_error()
+        token = credentials.credentials.strip()
+        context = control.authenticate(token)
+        if context is not None:
+            return context
+        bootstrap_token = config.server.bootstrap_token
+        if bootstrap_token and secrets.compare_digest(token, bootstrap_token):
+            return RequestContext(
+                user_id=None,
+                username=None,
+                principal_id="bootstrap",
+                api_key_id=None,
+                scopes=frozenset({ADMIN_USERS}),
+            )
+        raise_auth_error()
 
-    protected = [Depends(require_auth)]
+    def require_scope(scope: str, *, user_required: bool = True) -> Callable[..., RequestContext]:
+        def dependency(context: RequestContext = Depends(authenticate)) -> RequestContext:
+            if not context.has_scope(scope):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Missing required scope: {scope}")
+            if user_required and context.user_id is None:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A user-bound credential is required")
+            return context
+
+        return dependency
+
+    def runtime_for(context: RequestContext) -> PersonalMemoryRuntime:
+        if context.user_id is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="A user-bound credential is required")
+        return runtimes.for_user(context.user_id)
+
     app = FastAPI(
         title="PAM-OS REST API",
         version=__version__,
-        description="REST-only API for the PAM-OS personal memory runtime.",
+        description="Multi-user REST API for the PAM-OS personal memory runtime.",
     )
+    app.state.control_store = control
+    app.state.runtime_factory = runtimes
 
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
@@ -165,6 +234,7 @@ def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
                 )
                 response.headers["X-Request-ID"] = request_id
                 return response
+        request.state.request_id = request_id
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response
@@ -172,7 +242,7 @@ def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
         return error_response(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "validation_error",
             "Request validation failed",
             details=jsonable_encoder(exc.errors()),
@@ -184,11 +254,20 @@ def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
-        code = "unauthorized" if exc.status_code == status.HTTP_401_UNAUTHORIZED else "http_error"
-        response = error_response(exc.status_code, code, str(exc.detail))
+        codes = {
+            status.HTTP_401_UNAUTHORIZED: "unauthorized",
+            status.HTTP_403_FORBIDDEN: "forbidden",
+            status.HTTP_404_NOT_FOUND: "not_found",
+        }
+        response = error_response(exc.status_code, codes.get(exc.status_code, "http_error"), str(exc.detail))
         if exc.headers:
             response.headers.update(exc.headers)
         return response
+
+    @app.exception_handler(sqlite3.IntegrityError)
+    async def sqlite_integrity_error_handler(_request: Request, exc: sqlite3.IntegrityError) -> JSONResponse:
+        logger.info("PAM-OS SQLite constraint rejected a request", exc_info=(type(exc), exc, exc.__traceback__))
+        return error_response(status.HTTP_409_CONFLICT, "conflict", "The requested identity already exists")
 
     @app.exception_handler(sqlite3.OperationalError)
     async def sqlite_error_handler(_request: Request, exc: sqlite3.OperationalError) -> JSONResponse:
@@ -196,7 +275,7 @@ def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
         return error_response(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "storage_unavailable",
-            "Memory storage is temporarily unavailable",
+            "PAM-OS storage is temporarily unavailable",
         )
 
     @app.exception_handler(Exception)
@@ -212,9 +291,13 @@ def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
     def health_live() -> dict[str, Any]:
         return {"ok": True, "version": __version__, "api_version": API_VERSION}
 
-    @app.get("/health", include_in_schema=False, dependencies=protected)
-    @app.get("/v1/health/ready", tags=["health"], dependencies=protected, operation_id="health_ready")
-    def health_ready() -> dict[str, Any]:
+    @app.get("/v2/health/ready", tags=["health"], operation_id="health_ready")
+    def health_ready(
+        context: RequestContext = Depends(require_scope(MEMORY_READ)),
+    ) -> dict[str, Any]:
+        runtime = runtime_for(context)
+        with control.connect() as conn:
+            conn.execute("SELECT 1").fetchone()
         with runtime.store.connect() as conn:
             conn.execute("SELECT 1").fetchone()
         return {
@@ -224,14 +307,16 @@ def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
             "fts_available": runtime.store.fts_available,
         }
 
-    @app.get("/v1/meta", tags=["meta"], dependencies=protected, operation_id="get_api_metadata")
-    def get_api_metadata() -> dict[str, Any]:
+    @app.get("/v2/meta", tags=["meta"], operation_id="get_api_metadata")
+    def get_api_metadata(_context: RequestContext = Depends(authenticate)) -> dict[str, Any]:
         return {
             "name": "PAM-OS",
             "version": __version__,
             "api_version": API_VERSION,
             "adapter": "rest",
+            "auth": "bearer_api_key",
             "capabilities": [
+                "multi_user",
                 "prepare_context",
                 "capture_memory",
                 "observe_turn",
@@ -242,44 +327,157 @@ def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
             ],
         }
 
-    @app.get("/storage/stats", include_in_schema=False, dependencies=protected)
-    @app.get("/v1/storage/stats", tags=["admin"], dependencies=protected, operation_id="get_storage_stats")
-    def get_storage_stats() -> dict[str, Any]:
-        return to_plain(runtime.get_storage_stats())
+    @app.get("/v2/me", tags=["identity"], operation_id="get_current_identity")
+    def get_current_identity(context: RequestContext = Depends(authenticate)) -> dict[str, Any]:
+        return {
+            "user_id": context.user_id,
+            "username": context.username,
+            "principal_id": context.principal_id,
+            "api_key_id": context.api_key_id,
+            "scopes": sorted(context.scopes),
+            "bootstrap": context.is_bootstrap,
+        }
 
-    @app.get("/memory/inspect", include_in_schema=False, dependencies=protected)
-    @app.get("/v1/memory/inspect", tags=["admin"], dependencies=protected, operation_id="inspect_memory")
+    @app.post("/v2/admin/users", tags=["admin"], operation_id="create_user")
+    def create_user(
+        request: CreateUserRequest,
+        response: Response,
+        context: RequestContext = Depends(require_scope(ADMIN_USERS, user_required=False)),
+    ) -> dict[str, Any]:
+        provisioned = control.create_user(
+            username=request.username,
+            display_name=request.display_name,
+            principal_name=request.principal_name,
+            scopes=request.scopes,
+            expires_at=request.expires_at,
+        )
+        control.record_audit(
+            context,
+            action="user.create",
+            target_type="user",
+            target_id=provisioned.user.id,
+            metadata={"username": provisioned.user.username},
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return provisioned_user_payload(provisioned)
+
+    @app.post("/v2/admin/users/{user_id}/api-keys", tags=["admin"], operation_id="create_user_api_key")
+    def create_user_api_key(
+        user_id: str,
+        request: CreateApiKeyRequest,
+        response: Response,
+        context: RequestContext = Depends(require_scope(ADMIN_USERS, user_required=False)),
+    ) -> dict[str, Any]:
+        principal, api_key = control.issue_api_key(
+            user_id=user_id,
+            principal_name=request.principal_name,
+            scopes=request.scopes,
+            expires_at=request.expires_at,
+        )
+        control.record_audit(
+            context,
+            action="api_key.create",
+            target_type="api_key",
+            target_id=api_key.id,
+            metadata={"user_id": user_id, "principal_id": principal.id},
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return api_key_payload(principal, api_key)
+
+    @app.post("/v2/me/api-keys", tags=["identity"], operation_id="create_current_user_api_key")
+    def create_current_user_api_key(
+        request: CreateApiKeyRequest,
+        response: Response,
+        context: RequestContext = Depends(require_scope(API_KEYS_MANAGE)),
+    ) -> dict[str, Any]:
+        requested_scopes = frozenset(request.scopes)
+        if not requested_scopes.issubset(context.scopes):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot grant scopes you do not hold")
+        assert context.user_id is not None
+        principal, api_key = control.issue_api_key(
+            user_id=context.user_id,
+            principal_name=request.principal_name,
+            scopes=request.scopes,
+            expires_at=request.expires_at,
+        )
+        control.record_audit(
+            context,
+            action="api_key.create",
+            target_type="api_key",
+            target_id=api_key.id,
+            metadata={"principal_id": principal.id},
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return api_key_payload(principal, api_key)
+
+    @app.delete("/v2/me/api-keys/{api_key_id}", tags=["identity"], operation_id="revoke_current_user_api_key")
+    def revoke_current_user_api_key(
+        api_key_id: str,
+        context: RequestContext = Depends(require_scope(API_KEYS_MANAGE)),
+    ) -> dict[str, Any]:
+        assert context.user_id is not None
+        if not control.revoke_api_key_for_user(api_key_id=api_key_id, user_id=context.user_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+        control.record_audit(
+            context,
+            action="api_key.revoke",
+            target_type="api_key",
+            target_id=api_key_id,
+        )
+        return {"revoked": True, "api_key_id": api_key_id}
+
+    @app.get("/v2/storage/stats", tags=["maintenance"], operation_id="get_storage_stats")
+    def get_storage_stats(context: RequestContext = Depends(require_scope(MEMORY_INSPECT))) -> dict[str, Any]:
+        payload = to_plain(runtime_for(context).get_storage_stats())
+        payload.pop("db_path", None)
+        payload["user_id"] = context.user_id
+        return payload
+
+    @app.get("/v2/memory/inspect", tags=["maintenance"], operation_id="inspect_memory")
     def inspect_memory(
         table: InspectTable = "all",
         limit: int = Query(default=20, ge=1, le=MAX_RESULT_LIMIT),
         q: str | None = Query(default=None, max_length=MAX_QUERY_CHARS),
+        context: RequestContext = Depends(require_scope(MEMORY_INSPECT)),
     ) -> dict[str, Any]:
-        return to_plain(runtime.inspect_memory(table=table, limit=limit, query=q))
+        payload = to_plain(runtime_for(context).inspect_memory(table=table, limit=limit, query=q))
+        payload.get("stats", {}).pop("db_path", None)
+        return payload
 
-    @app.post("/memory/clear", include_in_schema=False, dependencies=protected)
-    @app.post("/v1/memory/clear", tags=["admin"], dependencies=protected, operation_id="clear_memory")
-    def clear_memory(request: ClearMemoryRequest) -> dict[str, Any]:
+    @app.post("/v2/memory/clear", tags=["maintenance"], operation_id="clear_memory")
+    def clear_memory(
+        request: ClearMemoryRequest,
+        context: RequestContext = Depends(require_scope(MEMORY_DELETE)),
+    ) -> dict[str, Any]:
         if not request.confirm:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="confirm must be true")
-        return to_plain(runtime.clear_memory())
+        payload = to_plain(runtime_for(context).clear_memory())
+        payload.get("storage_stats", {}).pop("db_path", None)
+        control.record_audit(context, action="memory.clear", target_type="user", target_id=context.user_id)
+        return payload
 
-    @app.post("/events", include_in_schema=False, dependencies=protected)
-    @app.post("/v1/events", tags=["memory"], dependencies=protected, operation_id="create_event")
-    def remember(request: EventRequest) -> dict[str, Any]:
+    @app.post("/v2/events", tags=["memory"], operation_id="create_event")
+    def remember(
+        request: EventRequest,
+        context: RequestContext = Depends(require_scope(MEMORY_WRITE)),
+    ) -> dict[str, Any]:
         return to_plain(
-            runtime.remember(
+            runtime_for(context).remember(
                 request.content,
                 source=request.source,
                 source_ref=request.source_ref,
-                metadata=request.metadata,
+                metadata=with_actor_metadata(request.metadata, context),
                 extract=request.extract,
             )
         )
 
-    @app.post("/v1/memories/search", tags=["memory"], dependencies=protected, operation_id="search_memories")
-    def search_memory(request: SearchRequest) -> list[dict[str, Any]]:
+    @app.post("/v2/memories/search", tags=["memory"], operation_id="search_memories")
+    def search_memory(
+        request: SearchRequest,
+        context: RequestContext = Depends(require_scope(MEMORY_READ)),
+    ) -> list[dict[str, Any]]:
         return to_plain(
-            runtime.search_memory(
+            runtime_for(context).search_memory(
                 request.query,
                 limit=request.limit,
                 types=request.types,
@@ -288,40 +486,20 @@ def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
             )
         )
 
-    @app.get("/memories/search", include_in_schema=False, dependencies=protected)
-    def search_memory_legacy(
-        q: str = Query(min_length=1, max_length=MAX_QUERY_CHARS),
-        limit: int = Query(default=10, ge=1, le=MAX_RESULT_LIMIT),
-        memory_types: list[MemoryType] | None = Query(default=None, alias="type"),
-        min_importance: float = Query(default=0.0, ge=0.0, le=1.0),
-        min_confidence: float = Query(default=0.0, ge=0.0, le=1.0),
-    ) -> list[dict[str, Any]]:
-        return to_plain(
-            runtime.search_memory(
-                q,
-                limit=limit,
-                types=memory_types,
-                min_importance=min_importance,
-                min_confidence=min_confidence,
-            )
-        )
-
-    @app.post("/v1/memory/should-use", tags=["memory"], dependencies=protected, operation_id="should_use_memory")
-    def should_use_memory(request: ShouldUseRequest) -> dict[str, Any]:
-        return to_plain(runtime.should_use_memory(request.task, request.conversation_summary))
-
-    @app.get("/memory/should-use", include_in_schema=False, dependencies=protected)
-    def should_use_memory_legacy(
-        task: str = Query(min_length=1, max_length=MAX_QUERY_CHARS),
-        conversation_summary: str | None = Query(default=None, max_length=MAX_TEXT_CHARS),
+    @app.post("/v2/memory/should-use", tags=["memory"], operation_id="should_use_memory")
+    def should_use_memory(
+        request: ShouldUseRequest,
+        context: RequestContext = Depends(require_scope(MEMORY_READ)),
     ) -> dict[str, Any]:
-        return to_plain(runtime.should_use_memory(task, conversation_summary))
+        return to_plain(runtime_for(context).should_use_memory(request.task, request.conversation_summary))
 
-    @app.post("/context/prepare", include_in_schema=False, dependencies=protected)
-    @app.post("/v1/context/prepare", tags=["context"], dependencies=protected, operation_id="prepare_context")
-    def prepare_context(request: PrepareRequest) -> dict[str, Any]:
+    @app.post("/v2/context/prepare", tags=["context"], operation_id="prepare_context")
+    def prepare_context(
+        request: PrepareRequest,
+        context: RequestContext = Depends(require_scope(MEMORY_READ)),
+    ) -> dict[str, Any]:
         return to_plain(
-            runtime.prepare_context(
+            runtime_for(context).prepare_context(
                 request.task,
                 conversation_summary=request.conversation_summary,
                 force=request.force,
@@ -330,24 +508,28 @@ def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
             )
         )
 
-    @app.post("/memory/capture", include_in_schema=False, dependencies=protected)
-    @app.post("/v1/memory/capture", tags=["memory"], dependencies=protected, operation_id="capture_memory")
-    def capture_memory(request: CaptureRequest) -> dict[str, Any]:
+    @app.post("/v2/memory/capture", tags=["memory"], operation_id="capture_memory")
+    def capture_memory(
+        request: CaptureRequest,
+        context: RequestContext = Depends(require_scope(MEMORY_WRITE)),
+    ) -> dict[str, Any]:
         return to_plain(
-            runtime.capture_memory(
+            runtime_for(context).capture_memory(
                 request.content,
                 source=request.source,
                 source_ref=request.source_ref,
-                metadata=request.metadata,
+                metadata=with_actor_metadata(request.metadata, context),
                 force=request.force,
             )
         )
 
-    @app.post("/behavior/choice", include_in_schema=False, dependencies=protected)
-    @app.post("/v1/behavior/choice", tags=["behavior"], dependencies=protected, operation_id="record_behavior_choice")
-    def record_behavior_choice(request: BehaviorChoiceRequest) -> dict[str, Any]:
+    @app.post("/v2/behavior/choice", tags=["behavior"], operation_id="record_behavior_choice")
+    def record_behavior_choice(
+        request: BehaviorChoiceRequest,
+        context: RequestContext = Depends(require_scope(MEMORY_WRITE)),
+    ) -> dict[str, Any]:
         return to_plain(
-            runtime.record_behavior_choice(
+            runtime_for(context).record_behavior_choice(
                 context=request.context,
                 chosen=request.chosen,
                 rejected=request.rejected,
@@ -357,11 +539,13 @@ def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
             )
         )
 
-    @app.post("/turns/observe", include_in_schema=False, dependencies=protected)
-    @app.post("/v1/turns/observe", tags=["behavior"], dependencies=protected, operation_id="observe_turn")
-    def observe_turn(request: ObserveTurnRequest) -> dict[str, Any]:
+    @app.post("/v2/turns/observe", tags=["behavior"], operation_id="observe_turn")
+    def observe_turn(
+        request: ObserveTurnRequest,
+        context: RequestContext = Depends(require_scope(MEMORY_WRITE)),
+    ) -> dict[str, Any]:
         return to_plain(
-            runtime.observe_turn(
+            runtime_for(context).observe_turn(
                 user_message=request.user_message,
                 assistant_message=request.assistant_message,
                 conversation_summary=request.conversation_summary,
@@ -371,24 +555,28 @@ def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
             )
         )
 
-    @app.post("/memory/consolidate", include_in_schema=False, dependencies=protected)
-    @app.post("/v1/memory/consolidate", tags=["admin"], dependencies=protected, operation_id="consolidate_memory")
-    def consolidate_memory(request: ConsolidateRequest) -> dict[str, Any]:
-        return to_plain(runtime.consolidate_memory(recent=request.recent))
+    @app.post("/v2/memory/consolidate", tags=["maintenance"], operation_id="consolidate_memory")
+    def consolidate_memory(
+        request: ConsolidateRequest,
+        context: RequestContext = Depends(require_scope(MEMORY_WRITE)),
+    ) -> dict[str, Any]:
+        return to_plain(runtime_for(context).consolidate_memory(recent=request.recent))
 
-    @app.get("/profile", include_in_schema=False, dependencies=protected)
-    @app.get("/v1/profile", tags=["profile"], dependencies=protected, operation_id="get_user_profile")
+    @app.get("/v2/profile", tags=["profile"], operation_id="get_user_profile")
     def get_user_profile(
         limit: int = Query(default=20, ge=1, le=MAX_RESULT_LIMIT),
         q: str | None = Query(default=None, max_length=MAX_QUERY_CHARS),
+        context: RequestContext = Depends(require_scope(MEMORY_READ)),
     ) -> list[dict[str, Any]]:
-        return to_plain(runtime.get_user_profile(limit=limit, query=q))
+        return to_plain(runtime_for(context).get_user_profile(limit=limit, query=q))
 
-    @app.post("/context/compile", include_in_schema=False, dependencies=protected)
-    @app.post("/v1/context/compile", tags=["context"], dependencies=protected, operation_id="compile_context")
-    def compile_context(request: CompileRequest) -> dict[str, Any]:
+    @app.post("/v2/context/compile", tags=["context"], operation_id="compile_context")
+    def compile_context(
+        request: CompileRequest,
+        context: RequestContext = Depends(require_scope(MEMORY_READ)),
+    ) -> dict[str, Any]:
         return to_plain(
-            runtime.compile_context(
+            runtime_for(context).compile_context(
                 request.task,
                 limit=request.limit,
                 min_importance=request.min_importance,
@@ -396,12 +584,50 @@ def create_app(db_path: Path | str | None = None, config=None) -> FastAPI:
             )
         )
 
-    @app.post("/reflect", include_in_schema=False, dependencies=protected)
-    @app.post("/v1/reflect", tags=["admin"], dependencies=protected, operation_id="reflect")
-    def reflect(request: ReflectRequest) -> dict[str, Any]:
-        return to_plain(runtime.reflect(recent=request.recent))
+    @app.post("/v2/reflect", tags=["maintenance"], operation_id="reflect")
+    def reflect(
+        request: ReflectRequest,
+        context: RequestContext = Depends(require_scope(MEMORY_READ)),
+    ) -> dict[str, Any]:
+        return to_plain(runtime_for(context).reflect(recent=request.recent))
 
     return app
+
+
+def with_actor_metadata(metadata: dict[str, Any], context: RequestContext) -> dict[str, Any]:
+    return {
+        **metadata,
+        "authenticated_principal_id": context.principal_id,
+    }
+
+
+def provisioned_user_payload(provisioned) -> dict[str, Any]:
+    return {
+        "user": to_plain(provisioned.user),
+        "principal": to_plain(provisioned.principal),
+        "api_key": {
+            "id": provisioned.api_key.id,
+            "token": provisioned.api_key.token,
+            "prefix": provisioned.api_key.prefix,
+            "scopes": sorted(provisioned.api_key.scopes),
+            "expires_at": provisioned.api_key.expires_at,
+            "created_at": provisioned.api_key.created_at,
+        },
+    }
+
+
+def api_key_payload(principal, api_key) -> dict[str, Any]:
+    return {
+        "principal": to_plain(principal),
+        "api_key": {
+            "id": api_key.id,
+            "token": api_key.token,
+            "prefix": api_key.prefix,
+            "scopes": sorted(api_key.scopes),
+            "expires_at": api_key.expires_at,
+            "created_at": api_key.created_at,
+        },
+    }
 
 
 def error_response(status_code: int, code: str, message: str, *, details: Any = None) -> JSONResponse:
@@ -411,25 +637,9 @@ def error_response(status_code: int, code: str, message: str, *, details: Any = 
     return JSONResponse(status_code=status_code, content=payload)
 
 
-def ensure_basic_auth(
-    credentials,
-    auth_enabled: bool,
-    auth_username: str,
-    auth_password: str,
-) -> None:
-    if not auth_enabled:
-        return
-    if credentials is None:
-        raise_auth_error()
-    username_ok = secrets.compare_digest(credentials.username, auth_username)
-    password_ok = secrets.compare_digest(credentials.password, auth_password)
-    if not (username_ok and password_ok):
-        raise_auth_error()
-
-
 def raise_auth_error() -> None:
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid REST API credentials",
-        headers={"WWW-Authenticate": "Basic"},
+        detail="Invalid or missing API key",
+        headers={"WWW-Authenticate": "Bearer"},
     )

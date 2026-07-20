@@ -20,8 +20,9 @@ PAM-OS 为 AI 助手提供一个可持久化的个人记忆服务。客户端在
 
 ```text
 AI 客户端 / Skill
-  -> PAM-OS REST API (/v1)
-  -> PersonalMemoryRuntime
+  -> PAM-OS REST API (/v2)
+  -> Bearer API Key / 认证用户上下文
+  -> 用户专属 PersonalMemoryRuntime
   -> 自适应策略 + Provider 管线
   -> SQLite MemoryStore
   -> 上下文包 / 捕获结果 / 用户画像
@@ -51,7 +52,7 @@ AI 客户端 / Skill
 
 ```bash
 uv sync
-export PAM_OS_DB="$HOME/.pam-os/memory.sqlite3"
+export PAM_OS_BOOTSTRAP_TOKEN='replace-with-a-long-random-secret'
 uv run python -m uvicorn pam_os.api:create_app --factory --host 127.0.0.1 --port 8765
 ```
 
@@ -59,8 +60,13 @@ uv run python -m uvicorn pam_os.api:create_app --factory --host 127.0.0.1 --port
 
 ```bash
 curl http://127.0.0.1:8765/health/live
-curl http://127.0.0.1:8765/v1/meta
+curl -sS -X POST http://127.0.0.1:8765/v2/admin/users \
+  -H "Authorization: Bearer $PAM_OS_BOOTSTRAP_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"alice","principal_name":"admin","scopes":["admin:users","api_keys:manage","memory:read","memory:write","memory:delete","memory:inspect"]}'
 ```
+
+创建用户的响应只返回一次 API Key。请安全保存，并在创建用户绑定的管理员密钥后移除 Bootstrap Token。
 
 OpenAPI 页面位于 `http://127.0.0.1:8765/docs`。
 
@@ -69,7 +75,8 @@ OpenAPI 页面位于 `http://127.0.0.1:8765/docs`。
 回答依赖历史的任务前准备上下文：
 
 ```bash
-curl -sS -X POST http://127.0.0.1:8765/v1/context/prepare \
+curl -sS -X POST http://127.0.0.1:8765/v2/context/prepare \
+  -H 'Authorization: Bearer <api-key>' \
   -H 'Content-Type: application/json' \
   -d '{"task":"按我的偏好规划 PAM-OS 下一步。","force":false}'
 ```
@@ -77,7 +84,8 @@ curl -sS -X POST http://127.0.0.1:8765/v1/context/prepare \
 完成重要回答后观察整个轮次：
 
 ```bash
-curl -sS -X POST http://127.0.0.1:8765/v1/turns/observe \
+curl -sS -X POST http://127.0.0.1:8765/v2/turns/observe \
+  -H 'Authorization: Bearer <api-key>' \
   -H 'Content-Type: application/json' \
   -d '{"user_message":"我偏好本地优先系统。","assistant_message":"收到。","auto_capture":true,"auto_learn_policy":true}'
 ```
@@ -85,7 +93,8 @@ curl -sS -X POST http://127.0.0.1:8765/v1/turns/observe \
 用户明确要求记住或导入内容时直接捕获：
 
 ```bash
-curl -sS -X POST http://127.0.0.1:8765/v1/memory/capture \
+curl -sS -X POST http://127.0.0.1:8765/v2/memory/capture \
+  -H 'Authorization: Bearer <api-key>' \
   -H 'Content-Type: application/json' \
   -d '{"content":"用户偏好本地优先、轻量、可控的技术方案。","source":"assistant","force":true}'
 ```
@@ -96,17 +105,16 @@ curl -sS -X POST http://127.0.0.1:8765/v1/memory/capture \
 
 ```toml
 [versions]
-skill = "0.4.2"
-api = "v1"
-server = "0.4.2"
-server_api = "v1"
+skill = "0.5.0"
+api = "v2"
+server = "0.5.0"
+server_api = "v2"
 server_checked_at = "2026-07-18T00:00:00Z"
 status = "match"
 
 [rest]
 url = "http://127.0.0.1:8765"
-username = ""
-password = ""
+token = ""
 timeout_seconds = 10
 ```
 
@@ -128,62 +136,60 @@ Windows PowerShell：
 .\scripts\install.ps1 --repo-dir $PWD --yes
 ```
 
-两个平台安装器同时负责首次安装和更新。未指定目标时，它们会自动识别已有集成并更新全部已安装目标；首次安装则交互选择目标，或在使用 `--yes` 时默认安装 Codex。安装器会沿用已有 skill 的 REST URL、用户名、密码和超时，刷新托管 checkout，探测服务端元数据，并写入可观测的版本快照。命令行参数和 `PAM_OS_REST_*` 环境变量优先级更高。安装器会在支持的平台上限制凭据配置文件权限。远程服务必须使用 HTTPS，并避免把密码直接写进 shell 历史。
+两个平台安装器同时负责首次安装和更新。未指定目标时，它们会自动识别已有集成并更新全部已安装目标；首次安装则交互选择目标，或在使用 `--yes` 时默认安装 Codex。安装器会沿用已有 skill 的 REST URL、Bearer Token 和超时，刷新托管 checkout，探测服务端元数据，并写入可观测的版本快照。命令行参数和 `PAM_OS_REST_*` 环境变量优先级更高。远程服务必须使用 HTTPS，并避免把 Token 直接写进 shell 历史。
 
 ## REST API
 
-正式接口统一使用 `/v1`。v0.3 的无版本路径暂时作为隐藏兼容别名保留一个迁移窗口。
+正式接口统一使用 `/v2`，不再提供 v1 或无版本兼容路由。
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/health/live` | 公开存活检查。 |
-| `GET` | `/v1/health/ready` | 认证后的数据库就绪检查。 |
-| `GET` | `/v1/meta` | 运行时与 API 版本。 |
-| `POST` | `/v1/events` | 写入原始事件并按需抽取记忆。 |
-| `POST` | `/v1/memories/search` | 按类型和分数条件搜索记忆。 |
-| `POST` | `/v1/memory/should-use` | 判断任务是否需要使用记忆。 |
-| `POST` | `/v1/context/prepare` | 准备可注入提示词的上下文。 |
-| `POST` | `/v1/memory/capture` | 选择性捕获稳定记忆。 |
-| `POST` | `/v1/behavior/choice` | 记录行为选择证据。 |
-| `POST` | `/v1/turns/observe` | 观察一个完整对话轮次。 |
-| `POST` | `/v1/memory/consolidate` | 将证据巩固为画像。 |
-| `GET` | `/v1/profile` | 读取画像特征。 |
-| `POST` | `/v1/context/compile` | 直接检索并编译上下文。 |
-| `POST` | `/v1/reflect` | 从近期记忆构建反思上下文。 |
-| `GET` | `/v1/storage/stats` | 查看存储统计。 |
-| `GET` | `/v1/memory/inspect` | 查看记忆表和质量轨迹。 |
-| `POST` | `/v1/memory/clear` | 显式确认后清空全部记忆。 |
+| `GET` | `/v2/health/ready` | 认证后的数据库就绪检查。 |
+| `GET` | `/v2/meta` | 运行时与 API 版本。 |
+| `GET` | `/v2/me` | 当前认证用户、Principal、API Key 与 scopes。 |
+| `POST` | `/v2/admin/users` | 创建用户及其首个 API Key。 |
+| `POST` | `/v2/events` | 写入原始事件并按需抽取记忆。 |
+| `POST` | `/v2/memories/search` | 按类型和分数条件搜索记忆。 |
+| `POST` | `/v2/memory/should-use` | 判断任务是否需要使用记忆。 |
+| `POST` | `/v2/context/prepare` | 准备可注入提示词的上下文。 |
+| `POST` | `/v2/memory/capture` | 选择性捕获稳定记忆。 |
+| `POST` | `/v2/behavior/choice` | 记录行为选择证据。 |
+| `POST` | `/v2/turns/observe` | 观察一个完整对话轮次。 |
+| `POST` | `/v2/memory/consolidate` | 将证据巩固为画像。 |
+| `GET` | `/v2/profile` | 读取画像特征。 |
+| `POST` | `/v2/context/compile` | 直接检索并编译上下文。 |
+| `POST` | `/v2/reflect` | 从近期记忆构建反思上下文。 |
+| `GET` | `/v2/storage/stats` | 查看存储统计。 |
+| `GET` | `/v2/memory/inspect` | 查看记忆表和质量轨迹。 |
+| `POST` | `/v2/memory/clear` | 显式确认后清空全部记忆。 |
 
 请求模型会拒绝未知字段和超大请求体，并限制文本长度、分数范围和结果条数。参数校验和运行时/存储错误会返回结构化错误。
 
 ## 安全模型
 
-PAM-OS v0.4 回归为个人、单数据库服务。旧版允许客户端自行传 `user_id` 切换 SQLite 文件，但这不是真正的鉴权边界，因此已经移除。
+PAM-OS v0.5 使用 Bearer API Key 将调用方 Principal 固定绑定到用户，并为每个用户路由到独立、带 owner 标记的 SQLite。业务请求不接受 `user_id` 或 `X-PAM-OS-User`。
 
-在 `config/pam-os.toml` 开启 Basic Auth：
+在 `config/pam-os.toml` 设置一次性 Bootstrap Token：
 
 ```toml
 [server]
 host = "127.0.0.1"
 port = 8765
-auth_enabled = true
-auth_username = "user"
-auth_password = "change-me"
+bootstrap_token = "replace-with-a-long-random-secret"
 ```
 
 也可以使用环境变量：
 
 ```bash
-export PAM_OS_AUTH_ENABLED=true
-export PAM_OS_AUTH_USERNAME=user
-export PAM_OS_AUTH_PASSWORD=change-me
+export PAM_OS_BOOTSTRAP_TOKEN='replace-with-a-long-random-secret'
 ```
 
-服务只要离开 localhost，就必须通过 HTTPS、TLS 反向代理或可信私网访问。不要在公网明文 HTTP 上传输 Basic Auth 凭据。
+Bootstrap Token 仅用于创建首个用户及用户绑定的管理员密钥，完成后应删除。服务只要离开 localhost，就必须通过 HTTPS、TLS 反向代理或可信私网访问。
 
 ## SQLite 并发基础
 
-REST 服务使用短连接访问 SQLite，开启外键、busy timeout，并在初始化时启用 WAL。这个配置适合个人 Agent 的常规并发，同时保持部署轻量。
+身份控制库和每个用户的记忆库都使用 SQLite 短连接、外键、busy timeout 与 WAL。用户数据库按内部不可变 ID 物理隔离。
 
 ## Docker
 
@@ -193,13 +199,11 @@ docker volume create pam-os-data
 docker run -d --name pam-os \
   -p 8765:8765 \
   -v pam-os-data:/data \
-  -e PAM_OS_AUTH_ENABLED=true \
-  -e PAM_OS_AUTH_USERNAME=user \
-  -e PAM_OS_AUTH_PASSWORD=change-me \
+  -e PAM_OS_BOOTSTRAP_TOKEN='replace-with-a-long-random-secret' \
   pam-os
 ```
 
-容器直接启动 ASGI factory，数据库位于 `/data/memory.sqlite3`。
+容器直接启动 ASGI factory，身份控制库和用户数据库都位于 `/data`。
 
 ## 配置
 
@@ -210,7 +214,8 @@ cp config/pam-os.example.toml config/pam-os.toml
 优先级为：环境变量 > `config/pam-os.toml` > 内置默认值。
 
 ```bash
-export PAM_OS_DB="$HOME/.pam-os/memory.sqlite3"
+export PAM_OS_DATA_DIR="$HOME/.pam-os"
+export PAM_OS_BOOTSTRAP_TOKEN='replace-with-a-long-random-secret'
 export PAM_OS_CONFIG="/path/to/pam-os.toml"
 export PAM_OS_HOST="0.0.0.0"
 export PAM_OS_PORT="8765"

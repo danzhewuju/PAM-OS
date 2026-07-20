@@ -95,7 +95,7 @@ Profile traits are ultra-long-term context. They should be concise, explainable,
 REST:
 
 ```text
-POST /v1/behavior/choice
-POST /v1/memory/consolidate
-GET /v1/profile
+POST /v2/behavior/choice
+POST /v2/memory/consolidate
+GET /v2/profile
 ```

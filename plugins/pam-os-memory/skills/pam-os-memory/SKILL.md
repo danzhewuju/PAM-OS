@@ -13,100 +13,89 @@ Read `config.toml` from this skill directory before every PAM-OS operation.
 
 ```toml
 [versions]
-skill = "0.4.2"
-api = "v1"
-server = "0.4.2"
-server_api = "v1"
+skill = "0.5.0"
+api = "v2"
+server = "0.5.0"
+server_api = "v2"
 server_checked_at = "2026-07-18T00:00:00Z"
 status = "match"
 
 [rest]
 url = "http://127.0.0.1:8765"
-username = ""
-password = ""
+token = ""
 timeout_seconds = 10
 ```
 
 Rules:
 
 - Treat `[versions]` as installation diagnostics. `skill` and `api` identify this installed client; the installer probes the configured REST service and records the observed `server`, `server_api`, check time, and comparison `status`.
-- Before the first memory operation in a turn, call `GET /v1/meta` and compare its `version` and `api_version` with `[versions]`. The live response is authoritative because the installation snapshot can become stale.
-- If `/v1/meta` returns 404, call `GET /openapi.json`. A server whose OpenAPI version starts with `0.3.` and exposes the required unversioned routes may use the legacy compatibility mapping below. Report one concise version warning before substantive output, including both skill and server versions.
+- Before the first memory operation in a turn, call `GET /v2/meta` and compare its `version` and `api_version` with `[versions]`. The live response is authoritative because the installation snapshot can become stale.
 - Do not silently use a different or unknown API. For authentication failures, unreachable services, malformed metadata, or an unsupported API generation, report the version-check failure and stop PAM-OS operations.
 - `rest.url` is required. Remove any trailing slash before joining endpoint paths.
-- If both `username` and `password` are non-empty, send HTTP Basic Auth on every protected request.
-- If either credential field is empty, do not send an Authorization header.
+- Send `Authorization: Bearer <token>` on every protected request. The token fixes the authenticated user; never send a `user_id` selector.
+- If `token` is empty, report that a PAM-OS API key must be configured and stop protected operations.
 - If the config is missing, invalid, or the API is unreachable, report that PAM-OS REST must be configured or started. Do not fall back to a local command.
 - Use short connect and total timeouts. Do not automatically retry write requests unless the server supports an idempotency key.
-
-## Legacy v0.3 Compatibility
-
-The canonical routes below are required for v1 servers. When live discovery identifies a `0.3.x` server with unversioned OpenAPI routes, use the same routes without `/v1`. Two legacy operations also use query parameters instead of a JSON body:
-
-- search: `GET /memories/search?q=...&limit=...&type=...&min_importance=...&min_confidence=...`
-- should use memory: `GET /memory/should-use?task=...&conversation_summary=...`
-
-URL-encode every query parameter. Do not send the removed `user_id` or `X-PAM-OS-User` selectors. All other listed v1 request bodies are unchanged on the supported v0.3 compatibility path. This fallback is a migration aid; recommend upgrading the server so `[versions].status` becomes `match`.
 
 ## REST Operations
 
 - health: `GET /health/live`
-- metadata: `GET /v1/meta`
-- add raw event: `POST /v1/events`
-- search: `POST /v1/memories/search`
-- should use memory: `POST /v1/memory/should-use`
-- prepare: `POST /v1/context/prepare`
-- capture: `POST /v1/memory/capture`
-- behavior choice: `POST /v1/behavior/choice`
-- observe turn: `POST /v1/turns/observe`
-- consolidate: `POST /v1/memory/consolidate`
-- profile: `GET /v1/profile?limit=20&q=...`
-- inspect: `GET /v1/memory/inspect?table=all&limit=20&q=...`
-- stats: `GET /v1/storage/stats`
-- compile: `POST /v1/context/compile`
-- reflect: `POST /v1/reflect`
-- clear memory: `POST /v1/memory/clear` with `confirm=true`; destructive and user-requested only.
+- metadata: `GET /v2/meta`
+- add raw event: `POST /v2/events`
+- search: `POST /v2/memories/search`
+- should use memory: `POST /v2/memory/should-use`
+- prepare: `POST /v2/context/prepare`
+- capture: `POST /v2/memory/capture`
+- behavior choice: `POST /v2/behavior/choice`
+- observe turn: `POST /v2/turns/observe`
+- consolidate: `POST /v2/memory/consolidate`
+- profile: `GET /v2/profile?limit=20&q=...`
+- inspect: `GET /v2/memory/inspect?table=all&limit=20&q=...`
+- stats: `GET /v2/storage/stats`
+- compile: `POST /v2/context/compile`
+- reflect: `POST /v2/reflect`
+- clear memory: `POST /v2/memory/clear` with `confirm=true`; destructive and user-requested only.
 
 REST request bodies use the exact JSON field names below. Memory text fields are named `content`, not `text`.
 
 ```http
-POST /v1/memories/search
+POST /v2/memories/search
 {"query":"memory query","limit":10,"types":["project"],"min_importance":0.0,"min_confidence":0.0}
 
-POST /v1/memory/should-use
+POST /v2/memory/should-use
 {"task":"current task","conversation_summary":null}
 
-POST /v1/context/prepare
+POST /v2/context/prepare
 {"task":"current task","conversation_summary":null,"force":false,"limit":null,"max_chars":null}
 
-POST /v1/memory/capture
+POST /v2/memory/capture
 {"content":"stable memory candidate","source":"assistant","source_ref":null,"metadata":{},"force":false}
 
-POST /v1/events
+POST /v2/events
 {"content":"raw event text","source":"manual","source_ref":null,"metadata":{},"extract":true}
 
-POST /v1/behavior/choice
+POST /v2/behavior/choice
 {"context":"decision context","chosen":["selected option"],"rejected":[],"deferred":[],"reason":null,"source_ref":null}
 
-POST /v1/turns/observe
+POST /v2/turns/observe
 {"user_message":"user text","assistant_message":"assistant text","conversation_summary":null,"source_ref":null,"auto_capture":true,"auto_learn_policy":true}
 
-POST /v1/memory/consolidate
+POST /v2/memory/consolidate
 {"recent":null}
 
-POST /v1/context/compile
+POST /v2/context/compile
 {"task":"current task","limit":null,"min_importance":0.0,"min_confidence":0.0}
 
-POST /v1/reflect
+POST /v2/reflect
 {"recent":50}
 
-POST /v1/memory/clear
+POST /v2/memory/clear
 {"confirm":true}
 ```
 
 ## Before Answering
 
-Call `POST /v1/context/prepare` when the user asks about:
+Call `POST /v2/context/prepare` when the user asks about:
 
 - `pamr ...`; set `force=true` and use the text after `pamr` as the task when present.
 - ongoing projects or continuing previous work.
@@ -120,9 +109,9 @@ When prepare returns a package, show one short memory status line before the sub
 
 ## After Answering
 
-When the user writes `pamw`, review the current conversation, extract concise stable memory candidates, and call `POST /v1/memory/capture`. The text after `pamw` is an extraction instruction, not content to save verbatim.
+When the user writes `pamw`, review the current conversation, extract concise stable memory candidates, and call `POST /v2/memory/capture`. The text after `pamw` is an extraction instruction, not content to save verbatim.
 
-After each substantial user-facing task, call `POST /v1/turns/observe` with:
+After each substantial user-facing task, call `POST /v2/turns/observe` with:
 
 ```json
 {"user_message":"user text","assistant_message":"assistant response","conversation_summary":null,"source_ref":null,"auto_capture":true,"auto_learn_policy":true}

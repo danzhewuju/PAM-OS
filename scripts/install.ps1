@@ -35,7 +35,7 @@ $DefaultOpenCodeAgentsFile = Join-PathMany @($AppDataDir, "opencode", "AGENTS.md
 $DefaultHermesAgentsFile = Join-Path $HermesHome "AGENTS.md"
 $DefaultHermesSkillDir = Join-PathMany @($HermesHome, "skills", $PluginName)
 $LegacyServerName = "pam_os_memory"
-$ExpectedApiVersion = "v1"
+$ExpectedApiVersion = "v2"
 $VersionCheckTimeoutSeconds = 3
 
 function Write-Info { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Blue }
@@ -57,10 +57,7 @@ Options:
   --hermes            Install Hermes skill and guidance.
   --all               Install all supported targets.
   --rest-url URL      PAM-OS REST server URL. Default: existing config, otherwise http://127.0.0.1:8765.
-  --rest-username USER
-                      REST Basic Auth username. Default: existing config, otherwise empty.
-  --rest-password PASS
-                      REST Basic Auth password. Default: existing config, otherwise empty.
+  --rest-token TOKEN  REST Bearer API key. Default: existing config, otherwise empty.
   --rest-timeout SEC  REST request timeout. Default: existing config, otherwise 10.
   --skip-version-check
                       Do not probe server metadata during installation.
@@ -168,10 +165,8 @@ function Read-RestConfig {
         Path = $Path
         HasUrl = $false
         Url = ""
-        HasUsername = $false
-        Username = ""
-        HasPassword = $false
-        Password = ""
+        HasToken = $false
+        Token = ""
         HasTimeout = $false
         TimeoutSeconds = 0
     }
@@ -182,12 +177,11 @@ function Read-RestConfig {
             continue
         }
         if ($section -ne "rest") { continue }
-        if ($line -match '^\s*(url|username|password)\s*=\s*"(.*)"\s*$') {
+        if ($line -match '^\s*(url|token)\s*=\s*"(.*)"\s*$') {
             $value = ConvertFrom-TomlString $Matches[2]
             switch ($Matches[1]) {
                 "url" { $result.HasUrl = $true; $result.Url = $value }
-                "username" { $result.HasUsername = $true; $result.Username = $value }
-                "password" { $result.HasPassword = $true; $result.Password = $value }
+                "token" { $result.HasToken = $true; $result.Token = $value }
             }
             continue
         }
@@ -196,7 +190,7 @@ function Read-RestConfig {
             $result.TimeoutSeconds = [int]$Matches[1]
         }
     }
-    if (-not ($result.HasUrl -or $result.HasUsername -or $result.HasPassword -or $result.HasTimeout)) { return $null }
+    if (-not ($result.HasUrl -or $result.HasToken -or $result.HasTimeout)) { return $null }
     return [pscustomobject]$result
 }
 
@@ -227,19 +221,16 @@ function Import-ExistingRestConfig {
             $script:RestUrl = $config.Url
             $script:RestUrlFromConfig = $true
         }
-        if (-not $script:RestUsernameExplicit -and $config.HasUsername) { $script:RestUsername = $config.Username }
-        if (-not $script:RestPasswordExplicit -and $config.HasPassword) { $script:RestPassword = $config.Password }
+        if (-not $script:RestTokenExplicit -and $config.HasToken) { $script:RestToken = $config.Token }
         if (-not $script:RestTimeoutExplicit -and $config.HasTimeout) {
             $script:RestTimeoutSeconds = $config.TimeoutSeconds
             $script:RestTimeoutFromConfig = $true
         }
 
-        $usernameDisplay = if ([string]::IsNullOrEmpty($config.Username)) { "(empty)" } else { $config.Username }
-        $passwordStatus = if ([string]::IsNullOrEmpty($config.Password)) { "empty" } else { "configured" }
+        $tokenStatus = if ([string]::IsNullOrEmpty($config.Token)) { "empty" } else { "configured" }
         Write-Info "Found existing REST config: $candidate"
         Write-Host "    Previous REST URL: $(if ([string]::IsNullOrEmpty($config.Url)) { '(empty)' } else { $config.Url })"
-        Write-Host "    Previous REST username: $usernameDisplay"
-        Write-Host "    Previous REST password: $passwordStatus"
+        Write-Host "    Previous REST token: $tokenStatus"
         return $true
     }
     return $false
@@ -435,8 +426,7 @@ status = "$(ConvertTo-TomlString $script:VersionStatus)"
 
 [rest]
 url = "$(ConvertTo-TomlString $script:RestUrl)"
-username = "$(ConvertTo-TomlString $script:RestUsername)"
-password = "$(ConvertTo-TomlString $script:RestPassword)"
+token = "$(ConvertTo-TomlString $script:RestToken)"
 timeout_seconds = $($script:RestTimeoutSeconds)
 "@
     Set-Content -LiteralPath $Path -Value $content -Encoding UTF8
@@ -463,9 +453,8 @@ function Read-SkillVersion {
 
 function Get-VersionRequestHeaders {
     $headers = @{ Accept = "application/json" }
-    if (-not [string]::IsNullOrEmpty($script:RestUsername) -and -not [string]::IsNullOrEmpty($script:RestPassword)) {
-        $tokenBytes = [Text.Encoding]::UTF8.GetBytes("$($script:RestUsername):$($script:RestPassword)")
-        $headers.Authorization = "Basic $([Convert]::ToBase64String($tokenBytes))"
+    if (-not [string]::IsNullOrEmpty($script:RestToken)) {
+        $headers.Authorization = "Bearer $($script:RestToken)"
     }
     return $headers
 }
@@ -490,7 +479,7 @@ function Probe-ServerVersion {
     $metaStatus = 0
 
     try {
-        $metadata = Invoke-RestMethod -Method Get -Uri "$baseUrl/v1/meta" -Headers $headers -TimeoutSec $timeout
+        $metadata = Invoke-RestMethod -Method Get -Uri "$baseUrl/v2/meta" -Headers $headers -TimeoutSec $timeout
         $script:ServerVersion = ([string]$metadata.version).Trim()
         $script:ServerApiVersion = ([string]$metadata.api_version).Trim()
         if ($script:ServerVersion -eq $script:SkillVersion -and $script:ServerApiVersion -eq $ExpectedApiVersion) {
@@ -510,8 +499,9 @@ function Probe-ServerVersion {
                 $openapi = Invoke-RestMethod -Method Get -Uri "$baseUrl/openapi.json" -Headers $headers -TimeoutSec $timeout
                 $script:ServerVersion = ([string]$openapi.info.version).Trim()
                 $paths = @($openapi.paths.PSObject.Properties.Name)
+                $hasV2Path = @($paths | Where-Object { $_.StartsWith("/v2/") }).Count -gt 0
                 $hasV1Path = @($paths | Where-Object { $_.StartsWith("/v1/") }).Count -gt 0
-                $script:ServerApiVersion = if ($hasV1Path) { "v1" } else { "unversioned" }
+                $script:ServerApiVersion = if ($hasV2Path) { "v2" } elseif ($hasV1Path) { "v1" } else { "unversioned" }
                 if ($script:ServerVersion -eq $script:SkillVersion -and $script:ServerApiVersion -eq $ExpectedApiVersion) {
                     $script:VersionStatus = "match"
                 }
@@ -671,18 +661,15 @@ $script:RepoDirExplicit = $false
 $script:RefreshRepo = $true
 $script:SourceDir = ""
 $envRestUrl = [Environment]::GetEnvironmentVariable("PAM_OS_REST_URL")
-$envRestUsername = [Environment]::GetEnvironmentVariable("PAM_OS_REST_USERNAME")
-$envRestPassword = [Environment]::GetEnvironmentVariable("PAM_OS_REST_PASSWORD")
+$envRestToken = [Environment]::GetEnvironmentVariable("PAM_OS_REST_TOKEN")
 $envRestTimeout = [Environment]::GetEnvironmentVariable("PAM_OS_REST_TIMEOUT_SECONDS")
 $script:RestUrlExplicit = $null -ne $envRestUrl
-$script:RestUsernameExplicit = $null -ne $envRestUsername
-$script:RestPasswordExplicit = $null -ne $envRestPassword
+$script:RestTokenExplicit = $null -ne $envRestToken
 $script:RestTimeoutExplicit = $null -ne $envRestTimeout
 $script:RestUrlFromConfig = $false
 $script:RestTimeoutFromConfig = $false
 $script:RestUrl = if ($script:RestUrlExplicit) { $envRestUrl } else { "" }
-$script:RestUsername = if ($script:RestUsernameExplicit) { $envRestUsername } else { "" }
-$script:RestPassword = if ($script:RestPasswordExplicit) { $envRestPassword } else { "" }
+$script:RestToken = if ($script:RestTokenExplicit) { $envRestToken } else { "" }
 $script:RestTimeoutSeconds = if ($script:RestTimeoutExplicit) { [int]$envRestTimeout } else { 0 }
 $script:ExistingRestConfig = ""
 $script:WriteMarketplace = $true
@@ -704,9 +691,7 @@ for ($i = 0; $i -lt $InstallerArgs.Count; $i++) {
         "--hermes" { $script:InstallHermes = $true }
         "--all" { Enable-Target "all" }
         "--rest-url" { $i++; $script:RestUrl = $InstallerArgs[$i]; $script:RestUrlExplicit = $true }
-        "--rest-username" { $i++; $script:RestUsername = $InstallerArgs[$i]; $script:RestUsernameExplicit = $true }
-        "--rest-user" { $i++; $script:RestUsername = $InstallerArgs[$i]; $script:RestUsernameExplicit = $true }
-        "--rest-password" { $i++; $script:RestPassword = $InstallerArgs[$i]; $script:RestPasswordExplicit = $true }
+        "--rest-token" { $i++; $script:RestToken = $InstallerArgs[$i]; $script:RestTokenExplicit = $true }
         "--rest-timeout" { $i++; $script:RestTimeoutSeconds = [int]$InstallerArgs[$i]; $script:RestTimeoutExplicit = $true }
         "--skip-version-check" { $script:CheckServerVersion = $false }
         "--repo-dir" { $i++; $script:RepoDir = $InstallerArgs[$i]; $script:RepoDirExplicit = $true; $script:RefreshRepo = $false }
@@ -754,8 +739,7 @@ if (-not $foundExistingRestConfig) {
 if (-not $script:RestUrlExplicit -and -not $script:RestUrlFromConfig) { $script:RestUrl = "http://127.0.0.1:8765" }
 if (-not $script:RestTimeoutExplicit -and -not $script:RestTimeoutFromConfig) { $script:RestTimeoutSeconds = 10 }
 $script:RestUrl = Prompt-Value "PAM-OS REST URL" $script:RestUrl
-$script:RestUsername = Prompt-Value "REST username" $script:RestUsername
-$script:RestPassword = Prompt-Secret "REST password" $script:RestPassword
+$script:RestToken = Prompt-Secret "REST Bearer API key" $script:RestToken
 if ([string]::IsNullOrWhiteSpace($script:RestUrl)) { Stop-Install "--rest-url must not be empty." }
 if ($script:RestTimeoutSeconds -le 0) { Stop-Install "--rest-timeout must be a positive integer." }
 

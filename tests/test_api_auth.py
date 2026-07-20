@@ -1,130 +1,290 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+import sqlite3
+
+from fastapi.testclient import TestClient
 import pytest
 
-from pam_os.api import CaptureRequest, ClearMemoryRequest, SearchRequest, create_app, ensure_basic_auth
+from pam_os.api import create_app
 from pam_os.config import AppConfig, ServerConfig
+from pam_os.identity import DEFAULT_USER_SCOPES, MEMORY_READ
 
 
-class Credentials:
-    def __init__(self, username: str, password: str):
-        self.username = username
-        self.password = password
+BOOTSTRAP_TOKEN = "test-bootstrap-token"
 
 
-def test_basic_auth_helper_accepts_valid_credentials():
-    ensure_basic_auth(Credentials("yuhao", "secret"), True, "yuhao", "secret")
+@pytest.fixture
+def api(tmp_path: Path) -> tuple[TestClient, object, Path]:
+    config = AppConfig(server=ServerConfig(bootstrap_token=BOOTSTRAP_TOKEN))
+    app = create_app(config, data_root=tmp_path)
+    return TestClient(app), app, tmp_path
 
 
-def test_basic_auth_helper_rejects_missing_credentials():
-    with pytest.raises(Exception) as exc:
-        ensure_basic_auth(None, True, "yuhao", "secret")
-    assert "401" in str(exc.value)
+def bearer(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
-def test_basic_auth_helper_rejects_wrong_credentials():
-    with pytest.raises(Exception) as exc:
-        ensure_basic_auth(Credentials("yuhao", "wrong"), True, "yuhao", "secret")
-    assert "401" in str(exc.value)
+def provision_user(
+    client: TestClient,
+    username: str,
+    *,
+    scopes: list[str] | None = None,
+) -> dict:
+    payload = {"username": username}
+    if scopes is not None:
+        payload["scopes"] = scopes
+    response = client.post(
+        "/v2/admin/users",
+        headers=bearer(BOOTSTRAP_TOKEN),
+        json=payload,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
-def test_rest_api_auth_enabled_requires_credentials():
-    config = AppConfig(server=ServerConfig(auth_enabled=True))
+def test_health_live_is_public_but_product_routes_require_bearer(api):
+    client, _app, _root = api
 
-    with pytest.raises(RuntimeError, match="auth_username or server.auth_password"):
-        create_app(db_path=None, config=config)
+    assert client.get("/health/live").status_code == 200
+    for path in ["/v2/meta", "/v2/me", "/v2/storage/stats", "/v2/profile"]:
+        response = client.get(path)
+        assert response.status_code == 401
+        assert response.headers["www-authenticate"] == "Bearer"
 
 
-def test_rest_post_routes_parse_request_models_from_json_body(tmp_path):
-    app = create_app(db_path=tmp_path / "memory.sqlite3")
-    post_paths = [
-        "/v1/memory/clear",
-        "/v1/events",
-        "/v1/memories/search",
-        "/v1/memory/should-use",
-        "/v1/context/prepare",
-        "/v1/memory/capture",
-        "/v1/behavior/choice",
-        "/v1/turns/observe",
-        "/v1/memory/consolidate",
-        "/v1/context/compile",
-        "/v1/reflect",
+def test_bootstrap_credential_can_provision_user_but_cannot_read_memory(api):
+    client, _app, _root = api
+
+    provisioned = provision_user(client, "alice")
+
+    assert provisioned["user"]["username"] == "alice"
+    assert provisioned["api_key"]["token"].startswith("pam_")
+    response = client.post(
+        "/v2/memories/search",
+        headers=bearer(BOOTSTRAP_TOKEN),
+        json={"query": "anything"},
+    )
+    assert response.status_code == 403
+
+
+def test_api_key_authentication_returns_fixed_identity(api):
+    client, _app, _root = api
+    provisioned = provision_user(client, "alice")
+    token = provisioned["api_key"]["token"]
+
+    response = client.get("/v2/me", headers=bearer(token))
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "user_id": provisioned["user"]["id"],
+        "username": "alice",
+        "principal_id": provisioned["principal"]["id"],
+        "api_key_id": provisioned["api_key"]["id"],
+        "scopes": sorted(DEFAULT_USER_SCOPES),
+        "bootstrap": False,
+    }
+
+
+def test_control_store_never_persists_plaintext_api_token(api):
+    client, _app, root = api
+    provisioned = provision_user(client, "alice")
+    token = provisioned["api_key"]["token"]
+
+    with sqlite3.connect(root / "control.sqlite3") as conn:
+        row = conn.execute("SELECT secret_hash FROM api_keys").fetchone()
+        database_bytes = (root / "control.sqlite3").read_bytes()
+
+    assert row is not None
+    assert row[0] != token
+    assert token.encode() not in database_bytes
+
+
+def test_two_users_are_isolated_across_capture_search_inspect_stats_and_clear(api):
+    client, app, _root = api
+    alice = provision_user(client, "alice")
+    bob = provision_user(client, "bob")
+    alice_headers = bearer(alice["api_key"]["token"])
+    bob_headers = bearer(bob["api_key"]["token"])
+
+    assert client.post(
+        "/v2/memory/capture",
+        headers=alice_headers,
+        json={"content": "Alice prefers quiet engineering answers.", "force": True},
+    ).status_code == 200
+    assert client.post(
+        "/v2/memory/capture",
+        headers=bob_headers,
+        json={"content": "Bob prefers concise product answers.", "force": True},
+    ).status_code == 200
+
+    alice_results = client.post(
+        "/v2/memories/search", headers=alice_headers, json={"query": "Alice"}
+    ).json()
+    bob_results = client.post(
+        "/v2/memories/search", headers=bob_headers, json={"query": "Alice"}
+    ).json()
+    alice_inspect = client.get(
+        "/v2/memory/inspect", headers=alice_headers, params={"table": "memories", "q": "Alice"}
+    ).json()
+    bob_inspect = client.get(
+        "/v2/memory/inspect", headers=bob_headers, params={"table": "memories", "q": "Alice"}
+    ).json()
+
+    assert alice_results
+    assert bob_results == []
+    assert alice_inspect["details"]["memories"]
+    assert bob_inspect["details"]["memories"] == []
+    alice_stats = client.get("/v2/storage/stats", headers=alice_headers).json()
+    assert "db_path" not in alice_stats
+    assert alice_stats["tables"]["events"]["count"] == 1
+    assert client.get("/v2/storage/stats", headers=bob_headers).json()["tables"]["events"]["count"] == 1
+    assert "db_path" not in alice_inspect["stats"]
+
+    clear = client.post("/v2/memory/clear", headers=alice_headers, json={"confirm": True})
+    assert clear.status_code == 200
+    assert "db_path" not in clear.json()["storage_stats"]
+    assert client.get("/v2/storage/stats", headers=alice_headers).json()["tables"]["events"]["count"] == 0
+    assert client.get("/v2/storage/stats", headers=bob_headers).json()["tables"]["events"]["count"] == 1
+
+    factory = app.state.runtime_factory
+    alice_path = factory.db_path_for_user(alice["user"]["id"])
+    bob_path = factory.db_path_for_user(bob["user"]["id"])
+    assert alice_path != bob_path
+    with sqlite3.connect(alice_path) as conn:
+        assert conn.execute("SELECT value FROM store_metadata WHERE key = 'owner_user_id'").fetchone()[0] == alice["user"]["id"]
+    with sqlite3.connect(bob_path) as conn:
+        assert conn.execute("SELECT value FROM store_metadata WHERE key = 'owner_user_id'").fetchone()[0] == bob["user"]["id"]
+
+
+def test_client_cannot_select_user_in_request_body_or_header(api):
+    client, _app, _root = api
+    alice = provision_user(client, "alice")
+    bob = provision_user(client, "bob")
+
+    response = client.post(
+        "/v2/memory/capture",
+        headers={**bearer(alice["api_key"]["token"]), "X-PAM-OS-User": bob["user"]["id"]},
+        json={"content": "attempted impersonation", "force": True, "user_id": bob["user"]["id"]},
+    )
+
+    assert response.status_code == 422
+    assert client.post(
+        "/v2/memories/search",
+        headers=bearer(bob["api_key"]["token"]),
+        json={"query": "impersonation"},
+    ).json() == []
+
+
+def test_parallel_users_keep_separate_write_streams(api):
+    client, app, _root = api
+    alice = provision_user(client, "alice")
+    bob = provision_user(client, "bob")
+    work = [
+        (alice["api_key"]["token"], "alice", index)
+        for index in range(8)
+    ] + [
+        (bob["api_key"]["token"], "bob", index)
+        for index in range(8)
     ]
 
-    for path in post_paths:
-        route = next(route for route in app.routes if getattr(route, "path", None) == path)
+    def capture(item):
+        token, username, index = item
+        with TestClient(app) as thread_client:
+            return thread_client.post(
+                "/v2/events",
+                headers=bearer(token),
+                json={"content": f"{username} event {index}", "extract": False},
+            ).status_code
 
-        assert [param.name for param in route.dependant.body_params] == ["request"]
-        assert "request" not in [param.name for param in route.dependant.query_params]
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        statuses = list(executor.map(capture, work))
 
-
-def test_clear_memory_rest_api_requires_confirmation(tmp_path):
-    app = create_app(db_path=tmp_path / "memory.sqlite3")
-    route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/clear")
-    request = ClearMemoryRequest(confirm=False)
-
-    with pytest.raises(Exception) as exc:
-        route.endpoint(request)
-
-    assert "400" in str(exc.value)
-
-
-def test_clear_memory_rest_api_clears_storage(tmp_path):
-    app = create_app(db_path=tmp_path / "memory.sqlite3")
-    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/capture")
-    clear_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/clear")
-    capture_request = CaptureRequest(content="我偏好 self-host、开源、可控系统。", force=True)
-    clear_request = ClearMemoryRequest(confirm=True)
-
-    capture_route.endpoint(capture_request)
-    payload = clear_route.endpoint(clear_request)
-
-    assert payload["deleted_counts"]["events"] == 1
-    assert payload["deleted_counts"]["memories"] >= 1
-    assert payload["storage_stats"]["tables"]["events"]["count"] == 0
-    assert payload["storage_stats"]["tables"]["memories"]["count"] == 0
+    assert statuses == [200] * len(work)
+    assert client.get(
+        "/v2/storage/stats", headers=bearer(alice["api_key"]["token"])
+    ).json()["tables"]["events"]["count"] == 8
+    assert client.get(
+        "/v2/storage/stats", headers=bearer(bob["api_key"]["token"])
+    ).json()["tables"]["events"]["count"] == 8
 
 
-def test_inspect_memory_rest_api_returns_requested_table(tmp_path):
-    app = create_app(db_path=tmp_path / "memory.sqlite3")
-    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/capture")
-    inspect_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/inspect")
-    capture_request = CaptureRequest(content="我偏好 self-host、开源、可控系统。", force=True)
+def test_scope_checks_prevent_write_and_introspection(api):
+    client, _app, _root = api
+    reader = provision_user(client, "reader", scopes=[MEMORY_READ])
+    headers = bearer(reader["api_key"]["token"])
 
-    capture_route.endpoint(capture_request)
-    payload = inspect_route.endpoint(table="memories", limit=10, q="self-host")
-
-    assert set(payload["details"]) == {"memories"}
-    assert payload["stats"]["tables"]["memories"]["count"] >= 1
-    assert payload["details"]["memories"]
-
-
-def test_inspect_memory_endpoint_rejects_unknown_table(tmp_path):
-    app = create_app(db_path=tmp_path / "memory.sqlite3")
-    inspect_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/inspect")
-
-    with pytest.raises(ValueError, match="table must be one of"):
-        inspect_route.endpoint(table="secrets", limit=20, q=None)
+    assert client.post(
+        "/v2/memories/search", headers=headers, json={"query": "anything"}
+    ).status_code == 200
+    assert client.post(
+        "/v2/memory/capture", headers=headers, json={"content": "forbidden", "force": True}
+    ).status_code == 403
+    assert client.get("/v2/storage/stats", headers=headers).status_code == 403
 
 
+def test_user_can_issue_and_revoke_non_escalating_api_key(api):
+    client, _app, _root = api
+    alice = provision_user(client, "alice")
+    original_headers = bearer(alice["api_key"]["token"])
 
-def test_search_memory_rest_api_supports_type_and_score_filters(tmp_path):
-    app = create_app(db_path=tmp_path / "memory.sqlite3")
-    capture_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memory/capture")
-    search_route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/memories/search")
-    capture_request = CaptureRequest(content="我是 Alex，我喜欢 digital products。", force=True)
+    issued = client.post(
+        "/v2/me/api-keys",
+        headers=original_headers,
+        json={"principal_name": "codex", "scopes": [MEMORY_READ]},
+    )
+    assert issued.status_code == 200
+    issued_payload = issued.json()
+    new_headers = bearer(issued_payload["api_key"]["token"])
+    assert client.get("/v2/me", headers=new_headers).status_code == 200
 
-    capture_route.endpoint(capture_request)
-    payload = search_route.endpoint(SearchRequest(query="Alex", types=["identity"]))
+    escalated = client.post(
+        "/v2/me/api-keys",
+        headers=original_headers,
+        json={"principal_name": "admin", "scopes": ["admin:users"]},
+    )
+    assert escalated.status_code == 403
 
-    assert payload
-    assert {item["memory"]["type"] for item in payload} == {"identity"}
+    revoked = client.delete(
+        f"/v2/me/api-keys/{issued_payload['api_key']['id']}", headers=original_headers
+    )
+    assert revoked.status_code == 200
+    assert client.get("/v2/me", headers=new_headers).status_code == 401
 
 
-def test_openapi_exposes_only_versioned_product_routes(tmp_path):
-    schema = create_app(db_path=tmp_path / "memory.sqlite3").openapi()
+def test_clear_requires_confirmation_and_delete_scope(api):
+    client, _app, _root = api
+    alice = provision_user(client, "alice")
 
-    assert "/v1/context/prepare" in schema["paths"]
-    assert "/v1/memory/capture" in schema["paths"]
+    response = client.post(
+        "/v2/memory/clear",
+        headers=bearer(alice["api_key"]["token"]),
+        json={"confirm": False},
+    )
+
+    assert response.status_code == 400
+
+
+def test_duplicate_username_returns_conflict(api):
+    client, _app, _root = api
+    provision_user(client, "alice")
+
+    response = client.post(
+        "/v2/admin/users",
+        headers=bearer(BOOTSTRAP_TOKEN),
+        json={"username": "ALICE"},
+    )
+
+    assert response.status_code == 409
+
+
+def test_openapi_exposes_only_v2_product_routes(api):
+    _client, app, _root = api
+    schema = app.openapi()
+
+    assert "/v2/context/prepare" in schema["paths"]
+    assert "/v2/memory/capture" in schema["paths"]
+    assert "/v2/admin/users" in schema["paths"]
+    assert not any(path.startswith("/v1/") for path in schema["paths"])
     assert "/context/prepare" not in schema["paths"]
-    assert "/memory/capture" not in schema["paths"]

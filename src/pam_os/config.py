@@ -10,15 +10,16 @@ from typing import Any
 @dataclass(frozen=True)
 class StorageConfig:
     db_path: str = "~/.pam-os/memory.sqlite3"
+    data_dir: str = "~/.pam-os"
+    control_db_path: str = ""
+    runtime_cache_size: int = 128
 
 
 @dataclass(frozen=True)
 class ServerConfig:
     host: str = "127.0.0.1"
     port: int = 8765
-    auth_enabled: bool = False
-    auth_username: str = ""
-    auth_password: str = ""
+    bootstrap_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,20 @@ def default_db_path(config: AppConfig | None = None) -> Path:
     return _resolve_path(config.storage.db_path)
 
 
+def data_dir(config: AppConfig | None = None) -> Path:
+    config = config or load_config()
+    configured = os.environ.get("PAM_OS_DATA_DIR") or config.storage.data_dir
+    return _resolve_path(configured)
+
+
+def control_db_path(config: AppConfig | None = None) -> Path:
+    config = config or load_config()
+    configured = os.environ.get("PAM_OS_CONTROL_DB") or config.storage.control_db_path
+    if configured:
+        return _resolve_path(configured)
+    return data_dir(config) / "control.sqlite3"
+
+
 def _resolve_config_path(config_path: Path | str | None) -> Path | None:
     configured = config_path or os.environ.get("PAM_OS_CONFIG")
     if configured:
@@ -135,13 +150,16 @@ def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
 def _apply_env_overrides(config: AppConfig) -> AppConfig:
     db_path = os.environ.get("PAM_OS_DB") or config.storage.db_path
     return AppConfig(
-        storage=StorageConfig(db_path=db_path),
+        storage=StorageConfig(
+            db_path=db_path,
+            data_dir=os.environ.get("PAM_OS_DATA_DIR", config.storage.data_dir),
+            control_db_path=os.environ.get("PAM_OS_CONTROL_DB", config.storage.control_db_path),
+            runtime_cache_size=_env_int("PAM_OS_RUNTIME_CACHE_SIZE", config.storage.runtime_cache_size),
+        ),
         server=ServerConfig(
             host=os.environ.get("PAM_OS_HOST", config.server.host),
             port=_env_int("PAM_OS_PORT", config.server.port),
-            auth_enabled=_env_bool("PAM_OS_AUTH_ENABLED", config.server.auth_enabled),
-            auth_username=os.environ.get("PAM_OS_AUTH_USERNAME", config.server.auth_username),
-            auth_password=os.environ.get("PAM_OS_AUTH_PASSWORD", config.server.auth_password),
+            bootstrap_token=os.environ.get("PAM_OS_BOOTSTRAP_TOKEN", config.server.bootstrap_token),
         ),
         context=config.context,
         consolidation=config.consolidation,

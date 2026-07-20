@@ -17,8 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_SOURCE = ROOT / "plugins" / "pam-os-memory"
 PROJECT_VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 EXISTING_URL = "https://memory.example.test:9443"
-EXISTING_USERNAME = 'existing"user\\name'
-EXISTING_PASSWORD = 'existing\\secret"key'
+EXISTING_TOKEN = 'pam_existing\\secret"key'
 EXISTING_TIMEOUT = 27
 
 
@@ -26,8 +25,7 @@ def _rest_env() -> dict[str, str]:
     env = os.environ.copy()
     for name in (
         "PAM_OS_REST_URL",
-        "PAM_OS_REST_USERNAME",
-        "PAM_OS_REST_PASSWORD",
+        "PAM_OS_REST_TOKEN",
         "PAM_OS_REST_TIMEOUT_SECONDS",
     ):
         env.pop(name, None)
@@ -46,8 +44,7 @@ def _write_existing_config(skill_dir: Path, *, rest_url: str = EXISTING_URL) -> 
                 "",
                 "[rest]",
                 f'url = "{rest_url}"',
-                f'username = "{toml_string(EXISTING_USERNAME)}"',
-                f'password = "{toml_string(EXISTING_PASSWORD)}"',
+                f'token = "{toml_string(EXISTING_TOKEN)}"',
                 f"timeout_seconds = {EXISTING_TIMEOUT}",
                 "",
             )
@@ -89,19 +86,17 @@ def _assert_reused_config(result: subprocess.CompletedProcess[str], config_path:
     assert "Found existing REST config" in output
     assert "Mode: update" in output
     assert f"Previous REST URL: {EXISTING_URL}" in output
-    assert f"Previous REST username: {EXISTING_USERNAME}" in output
-    assert "Previous REST password: configured" in output
-    assert EXISTING_PASSWORD not in output
+    assert "Previous REST token: configured" in output
+    assert EXISTING_TOKEN not in output
 
     installed = config_path.read_text(encoding="utf-8-sig")
     assert f'url = "{EXISTING_URL}"' in installed
-    assert f'username = "{toml_string(EXISTING_USERNAME)}"' in installed
-    assert f'password = "{toml_string(EXISTING_PASSWORD)}"' in installed
+    assert f'token = "{toml_string(EXISTING_TOKEN)}"' in installed
     assert f"timeout_seconds = {EXISTING_TIMEOUT}" in installed
     config = tomllib.loads(installed)
     assert config["versions"] == {
         "skill": PROJECT_VERSION,
-        "api": "v1",
+        "api": "v2",
         "server": "",
         "server_api": "",
         "server_checked_at": "",
@@ -113,7 +108,7 @@ def _assert_reused_config(result: subprocess.CompletedProcess[str], config_path:
 def _legacy_version_server():
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802 - stdlib handler API
-            if self.path == "/v1/meta":
+            if self.path == "/v2/meta":
                 self.send_response(404)
                 self.end_headers()
                 return
@@ -240,7 +235,7 @@ def test_bash_installer_records_legacy_server_version_mismatch(tmp_path: Path) -
 
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
-    assert f"Version mismatch: skill {PROJECT_VERSION} / API v1; server 0.3.2 / API unversioned" in output
+    assert f"Version mismatch: skill {PROJECT_VERSION} / API v2; server 0.3.2 / API unversioned" in output
     config = tomllib.loads(config_path.read_text(encoding="utf-8-sig"))
     assert config["versions"]["skill"] == PROJECT_VERSION
     assert config["versions"]["server"] == "0.3.2"

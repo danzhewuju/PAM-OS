@@ -5,7 +5,7 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PAM_OS_DB=/data/memory.sqlite3 \
+    PAM_OS_DATA_DIR=/data \
     PAM_OS_HOST=0.0.0.0 \
     PAM_OS_PORT=8765
 

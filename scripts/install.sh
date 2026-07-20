@@ -16,7 +16,7 @@ DEFAULT_HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 DEFAULT_HERMES_AGENTS_FILE="$DEFAULT_HERMES_HOME/AGENTS.md"
 DEFAULT_HERMES_SKILL_DIR="$DEFAULT_HERMES_HOME/skills/$PLUGIN_NAME"
 LEGACY_SERVER_NAME="pam_os_memory"
-EXPECTED_API_VERSION="v1"
+EXPECTED_API_VERSION="v2"
 VERSION_CHECK_TIMEOUT_SECONDS=3
 
 info() {
@@ -47,10 +47,7 @@ Options:
   --hermes            Install Hermes skill and guidance.
   --all               Install all supported targets.
   --rest-url URL      PAM-OS REST server URL. Default: existing config, otherwise http://127.0.0.1:8765.
-  --rest-username USER
-                      REST Basic Auth username. Default: existing config, otherwise empty.
-  --rest-password PASS
-                      REST Basic Auth password. Default: existing config, otherwise empty.
+  --rest-token TOKEN  REST Bearer API key. Default: existing config, otherwise empty.
   --rest-timeout SEC  REST request timeout. Default: existing config, otherwise 10.
   --skip-version-check
                       Do not probe server metadata during installation.
@@ -300,12 +297,10 @@ read_rest_config() {
   local line section="" key value
 
   CONFIG_HAS_URL=0
-  CONFIG_HAS_USERNAME=0
-  CONFIG_HAS_PASSWORD=0
+  CONFIG_HAS_TOKEN=0
   CONFIG_HAS_TIMEOUT=0
   CONFIG_URL=""
-  CONFIG_USERNAME=""
-  CONFIG_PASSWORD=""
+  CONFIG_TOKEN=""
   CONFIG_TIMEOUT=""
 
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -316,13 +311,12 @@ read_rest_config() {
     fi
     [[ "$section" == "rest" ]] || continue
 
-    if [[ "$line" =~ ^[[:space:]]*(url|username|password)[[:space:]]*=[[:space:]]*\"(.*)\"[[:space:]]*$ ]]; then
+    if [[ "$line" =~ ^[[:space:]]*(url|token)[[:space:]]*=[[:space:]]*\"(.*)\"[[:space:]]*$ ]]; then
       key="${BASH_REMATCH[1]}"
       value="$(toml_unescape "${BASH_REMATCH[2]}")"
       case "$key" in
         url) CONFIG_HAS_URL=1; CONFIG_URL="$value" ;;
-        username) CONFIG_HAS_USERNAME=1; CONFIG_USERNAME="$value" ;;
-        password) CONFIG_HAS_PASSWORD=1; CONFIG_PASSWORD="$value" ;;
+        token) CONFIG_HAS_TOKEN=1; CONFIG_TOKEN="$value" ;;
       esac
     elif [[ "$line" =~ ^[[:space:]]*timeout_seconds[[:space:]]*=[[:space:]]*([0-9]+)[[:space:]]*$ ]]; then
       CONFIG_HAS_TIMEOUT=1
@@ -330,11 +324,11 @@ read_rest_config() {
     fi
   done < "$path"
 
-  [[ "$CONFIG_HAS_URL$CONFIG_HAS_USERNAME$CONFIG_HAS_PASSWORD$CONFIG_HAS_TIMEOUT" != "0000" ]]
+  [[ "$CONFIG_HAS_URL$CONFIG_HAS_TOKEN$CONFIG_HAS_TIMEOUT" != "000" ]]
 }
 
 load_existing_rest_config() {
-  local candidate password_status username_display
+  local candidate token_status
   local -a candidates=()
 
   if [[ "$INSTALL_CODEX" == "1" ]]; then
@@ -362,20 +356,17 @@ load_existing_rest_config() {
       REST_URL="$CONFIG_URL"
       REST_URL_FROM_CONFIG=1
     fi
-    [[ "$REST_USERNAME_EXPLICIT" == "1" || "$CONFIG_HAS_USERNAME" != "1" ]] || REST_USERNAME="$CONFIG_USERNAME"
-    [[ "$REST_PASSWORD_EXPLICIT" == "1" || "$CONFIG_HAS_PASSWORD" != "1" ]] || REST_PASSWORD="$CONFIG_PASSWORD"
+    [[ "$REST_TOKEN_EXPLICIT" == "1" || "$CONFIG_HAS_TOKEN" != "1" ]] || REST_TOKEN="$CONFIG_TOKEN"
     if [[ "$REST_TIMEOUT_EXPLICIT" != "1" && "$CONFIG_HAS_TIMEOUT" == "1" ]]; then
       REST_TIMEOUT_SECONDS="$CONFIG_TIMEOUT"
       REST_TIMEOUT_FROM_CONFIG=1
     fi
 
-    username_display="${CONFIG_USERNAME:-(empty)}"
-    password_status="empty"
-    [[ -n "$CONFIG_PASSWORD" ]] && password_status="configured"
+    token_status="empty"
+    [[ -n "$CONFIG_TOKEN" ]] && token_status="configured"
     info "Found existing REST config: $candidate"
     printf '    Previous REST URL: %s\n' "${CONFIG_URL:-(empty)}" >&2
-    printf '    Previous REST username: %s\n' "$username_display" >&2
-    printf '    Previous REST password: %s\n' "$password_status" >&2
+    printf '    Previous REST token: %s\n' "$token_status" >&2
     return 0
   done
 
@@ -468,8 +459,7 @@ status = "$(toml_escape "$VERSION_STATUS")"
 
 [rest]
 url = "$(toml_escape "$REST_URL")"
-username = "$(toml_escape "$REST_USERNAME")"
-password = "$(toml_escape "$REST_PASSWORD")"
+token = "$(toml_escape "$REST_TOKEN")"
 timeout_seconds = $REST_TIMEOUT_SECONDS
 EOF
   chmod 600 "$path"
@@ -503,28 +493,24 @@ probe_server_version() {
   SERVER_CHECKED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   output="$({
     PAM_OS_PROBE_URL="$REST_URL" \
-    PAM_OS_PROBE_USERNAME="$REST_USERNAME" \
-    PAM_OS_PROBE_PASSWORD="$REST_PASSWORD" \
+    PAM_OS_PROBE_TOKEN="$REST_TOKEN" \
     PAM_OS_PROBE_TIMEOUT="$VERSION_CHECK_TIMEOUT_SECONDS" \
     PAM_OS_SKILL_VERSION="$SKILL_VERSION" \
     PAM_OS_EXPECTED_API="$EXPECTED_API_VERSION" \
       python3 - <<'PY'
-import base64
 import json
 import os
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 base_url = os.environ["PAM_OS_PROBE_URL"].rstrip("/")
-username = os.environ.get("PAM_OS_PROBE_USERNAME", "")
-password = os.environ.get("PAM_OS_PROBE_PASSWORD", "")
+token = os.environ.get("PAM_OS_PROBE_TOKEN", "")
 timeout = float(os.environ.get("PAM_OS_PROBE_TIMEOUT", "3"))
 skill_version = os.environ["PAM_OS_SKILL_VERSION"]
 expected_api = os.environ["PAM_OS_EXPECTED_API"]
 headers = {"Accept": "application/json"}
-if username and password:
-    token = base64.b64encode(f"{username}:{password}".encode()).decode()
-    headers["Authorization"] = f"Basic {token}"
+if token:
+    headers["Authorization"] = f"Bearer {token}"
 
 
 def fetch(path):
@@ -538,7 +524,7 @@ def fetch(path):
         return None, None
 
 
-status, metadata = fetch("/v1/meta")
+status, metadata = fetch("/v2/meta")
 if status == 200 and isinstance(metadata, dict):
     server_version = str(metadata.get("version") or "").strip()
     server_api = str(metadata.get("api_version") or "").strip()
@@ -551,7 +537,12 @@ else:
         info = openapi.get("info") or {}
         server_version = str(info.get("version") or "").strip()
         paths = openapi.get("paths") or {}
-        server_api = "v1" if any(str(path).startswith("/v1/") for path in paths) else "unversioned"
+        if any(str(path).startswith("/v2/") for path in paths):
+            server_api = "v2"
+        elif any(str(path).startswith("/v1/") for path in paths):
+            server_api = "v1"
+        else:
+            server_api = "unversioned"
         comparison = "match" if server_version == skill_version and server_api == expected_api else "mismatch"
     elif openapi_status in {401, 403}:
         server_version, server_api, comparison = "", "", "authentication_failed"
@@ -719,8 +710,7 @@ PY
 
 configure_rest_runtime() {
   REST_URL="$(prompt_value "PAM-OS REST URL" "$REST_URL")"
-  REST_USERNAME="$(prompt_value "REST username" "$REST_USERNAME")"
-  REST_PASSWORD="$(prompt_secret "REST password" "$REST_PASSWORD")"
+  REST_TOKEN="$(prompt_secret "REST Bearer API key" "$REST_TOKEN")"
 }
 
 ASSUME_YES=0
@@ -744,12 +734,10 @@ REPO_DIR_EXPLICIT=0
 REFRESH_REPO=1
 SOURCE_DIR=""
 REST_URL="${PAM_OS_REST_URL-}"
-REST_USERNAME="${PAM_OS_REST_USERNAME-}"
-REST_PASSWORD="${PAM_OS_REST_PASSWORD-}"
+REST_TOKEN="${PAM_OS_REST_TOKEN-}"
 REST_TIMEOUT_SECONDS="${PAM_OS_REST_TIMEOUT_SECONDS-}"
 REST_URL_EXPLICIT=0
-REST_USERNAME_EXPLICIT=0
-REST_PASSWORD_EXPLICIT=0
+REST_TOKEN_EXPLICIT=0
 REST_TIMEOUT_EXPLICIT=0
 REST_URL_FROM_CONFIG=0
 REST_TIMEOUT_FROM_CONFIG=0
@@ -760,8 +748,7 @@ SERVER_API_VERSION=""
 SERVER_CHECKED_AT=""
 VERSION_STATUS="not_checked"
 [[ -n "${PAM_OS_REST_URL+x}" ]] && REST_URL_EXPLICIT=1
-[[ -n "${PAM_OS_REST_USERNAME+x}" ]] && REST_USERNAME_EXPLICIT=1
-[[ -n "${PAM_OS_REST_PASSWORD+x}" ]] && REST_PASSWORD_EXPLICIT=1
+[[ -n "${PAM_OS_REST_TOKEN+x}" ]] && REST_TOKEN_EXPLICIT=1
 [[ -n "${PAM_OS_REST_TIMEOUT_SECONDS+x}" ]] && REST_TIMEOUT_EXPLICIT=1
 EXISTING_REST_CONFIG=""
 WRITE_MARKETPLACE=1
@@ -776,8 +763,7 @@ while [[ $# -gt 0 ]]; do
     --hermes) INSTALL_HERMES=1; shift ;;
     --all) enable_target all; shift ;;
     --rest-url) REST_URL="${2:-}"; REST_URL_EXPLICIT=1; shift 2 ;;
-    --rest-username|--rest-user) REST_USERNAME="${2:-}"; REST_USERNAME_EXPLICIT=1; shift 2 ;;
-    --rest-password) REST_PASSWORD="${2:-}"; REST_PASSWORD_EXPLICIT=1; shift 2 ;;
+    --rest-token) REST_TOKEN="${2:-}"; REST_TOKEN_EXPLICIT=1; shift 2 ;;
     --rest-timeout) REST_TIMEOUT_SECONDS="${2:-}"; REST_TIMEOUT_EXPLICIT=1; shift 2 ;;
     --skip-version-check) CHECK_SERVER_VERSION=0; shift ;;
     --repo-dir) REPO_DIR="${2:-}"; REPO_DIR_EXPLICIT=1; REFRESH_REPO=0; shift 2 ;;

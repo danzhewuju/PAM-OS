@@ -1167,16 +1167,6 @@ def test_storage_stats_include_table_breakdown(tmp_path):
     assert "unconsolidated_count" in stats.tables["behavior_events"]
 
 
-def test_storage_stats_exposed_by_rest_api(tmp_path):
-    app = create_app(db_path=tmp_path / "memory.sqlite3")
-    route = next(route for route in app.routes if getattr(route, "path", None) == "/v1/storage/stats")
-    payload = route.endpoint()
-
-    assert payload["db_path"].endswith("memory.sqlite3")
-    assert "tables" in payload
-    assert "memories" in payload["tables"]
-
-
 def test_inspect_memory_returns_stats_and_details(tmp_path):
     runtime = PersonalMemoryRuntime(db_path=tmp_path / "memory.sqlite3")
     runtime.capture_memory("我偏好 self-host、开源、可控系统。", force=True)

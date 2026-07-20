@@ -20,3 +20,17 @@ def test_server_port_env_requires_integer(monkeypatch):
 
     with pytest.raises(ValueError, match="PAM_OS_PORT must be an integer"):
         load_config(config_path="/tmp/pam-os-missing.toml")
+
+
+def test_multi_user_storage_and_bootstrap_can_be_overridden_by_env(monkeypatch):
+    monkeypatch.setenv("PAM_OS_DATA_DIR", "/tmp/pam-os-users")
+    monkeypatch.setenv("PAM_OS_CONTROL_DB", "/tmp/pam-os-control.sqlite3")
+    monkeypatch.setenv("PAM_OS_RUNTIME_CACHE_SIZE", "17")
+    monkeypatch.setenv("PAM_OS_BOOTSTRAP_TOKEN", "bootstrap-secret")
+
+    config = load_config(config_path="/tmp/pam-os-missing.toml")
+
+    assert config.storage.data_dir == "/tmp/pam-os-users"
+    assert config.storage.control_db_path == "/tmp/pam-os-control.sqlite3"
+    assert config.storage.runtime_cache_size == 17
+    assert config.server.bootstrap_token == "bootstrap-secret"

@@ -43,10 +43,12 @@ def test_packaged_skill_configs_identify_skill_and_api_versions():
     ]
 
     for path in paths:
-        versions = tomllib.loads(path.read_text(encoding="utf-8"))["versions"]
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+        versions = config["versions"]
         assert versions["skill"] == project_version()
-        assert versions["api"] == "v1"
+        assert versions["api"] == "v2"
         assert versions["status"] == "not_checked"
+        assert set(config["rest"]) == {"url", "token", "timeout_seconds"}
 
 
 def test_packaged_skill_docs_show_current_config_version():

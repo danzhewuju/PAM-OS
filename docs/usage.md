@@ -1,14 +1,15 @@
 # PAM-OS 使用文档
 
-PAM-OS v0.4 将 REST API 设为唯一产品入口。核心 `PersonalMemoryRuntime` 仍保持协议无关，但 AI 客户端、skill、插件和部署都通过 `/v1` HTTP 接口访问，不再提供本地业务命令。
+PAM-OS v0.5 使用多用户 `/v2` REST API。核心 `PersonalMemoryRuntime` 仍保持协议无关，API 层通过认证主体把请求路由到用户专属 SQLite。
 
 ## 1. 架构
 
 ```text
 Agent / Skill
   -> REST API
-     -> 请求校验 / Basic Auth / 错误映射
-     -> PersonalMemoryRuntime
+     -> Bearer API Key / scopes / 错误映射
+     -> authenticated user -> UserRuntimeFactory
+     -> 用户专属 PersonalMemoryRuntime
         -> AdaptiveMemoryPolicy
         -> Extraction / Retrieval / Reranking
         -> Profile Consolidation
@@ -30,22 +31,22 @@ Agent / Skill
 
 ```bash
 uv sync
-export PAM_OS_DB="$HOME/.pam-os/memory.sqlite3"
+export PAM_OS_BOOTSTRAP_TOKEN='replace-with-a-long-random-secret'
 uv run python -m uvicorn pam_os.api:create_app --factory --host 127.0.0.1 --port 8765
 ```
 
 Windows PowerShell：
 
 ```powershell
-$env:PAM_OS_DB = "$HOME\.pam-os\memory.sqlite3"
+$env:PAM_OS_BOOTSTRAP_TOKEN = "replace-with-a-long-random-secret"
 uv run python -m uvicorn pam_os.api:create_app --factory --host 127.0.0.1 --port 8765
 ```
 
 服务入口：
 
 - 存活检查：`GET /health/live`
-- 就绪检查：`GET /v1/health/ready`
-- 版本信息：`GET /v1/meta`
+- 就绪检查：`GET /v2/health/ready`
+- 版本信息：`GET /v2/meta`
 - OpenAPI：`GET /openapi.json`
 - Swagger UI：`GET /docs`
 
@@ -61,14 +62,14 @@ cp config/pam-os.example.toml config/pam-os.toml
 
 ```toml
 [storage]
-db_path = "~/.pam-os/memory.sqlite3"
+data_dir = "~/.pam-os"
+control_db_path = ""
+runtime_cache_size = 128
 
 [server]
 host = "127.0.0.1"
 port = 8765
-auth_enabled = true
-auth_username = "user"
-auth_password = "change-me"
+bootstrap_token = "replace-with-a-long-random-secret"
 
 [context]
 default_limit = 12
@@ -79,13 +80,13 @@ profile_limit = 8
 环境变量会覆盖 TOML：
 
 ```text
-PAM_OS_DB
+PAM_OS_DATA_DIR
+PAM_OS_CONTROL_DB
+PAM_OS_RUNTIME_CACHE_SIZE
 PAM_OS_CONFIG
 PAM_OS_HOST
 PAM_OS_PORT
-PAM_OS_AUTH_ENABLED
-PAM_OS_AUTH_USERNAME
-PAM_OS_AUTH_PASSWORD
+PAM_OS_BOOTSTRAP_TOKEN
 ```
 
 ## 4. Skill 配置
@@ -94,24 +95,24 @@ PAM_OS_AUTH_PASSWORD
 
 ```toml
 [versions]
-skill = "0.4.2"
-api = "v1"
-server = "0.4.2"
-server_api = "v1"
+skill = "0.5.0"
+api = "v2"
+server = "0.5.0"
+server_api = "v2"
 server_checked_at = "2026-07-18T00:00:00Z"
 status = "match"
 
 [rest]
 url = "http://127.0.0.1:8765"
-username = ""
-password = ""
+token = ""
 timeout_seconds = 10
 ```
 
 规则：
 
 - `url` 必须存在。
-- 用户名和密码都非空时发送 Basic Auth。
+- 每个受保护请求发送 `Authorization: Bearer <token>`。
+- Token 固定绑定用户；请求不得发送 `user_id` 或 `X-PAM-OS-User`。
 - 服务不在 localhost 时必须使用 HTTPS。
 - API 不可达时直接提示启动或配置服务，不回退到本地进程。
 - 写请求默认不自动重试，避免重复事件。
@@ -123,7 +124,7 @@ timeout_seconds = 10
 当任务依赖用户偏好、项目历史、历史决策、长期目标、回答风格或上下文连续性时调用：
 
 ```http
-POST /v1/context/prepare
+POST /v2/context/prepare
 Content-Type: application/json
 
 {
@@ -142,7 +143,7 @@ Content-Type: application/json
 每个 substantial user-facing turn 完成后调用：
 
 ```http
-POST /v1/turns/observe
+POST /v2/turns/observe
 Content-Type: application/json
 
 {
@@ -162,7 +163,7 @@ substantial turn 包括分析、排障、实现、规划、决策、偏好、纠
 用户明确要求“记住”或导入稳定内容时使用：
 
 ```http
-POST /v1/memory/capture
+POST /v2/memory/capture
 Content-Type: application/json
 
 {
@@ -181,12 +182,12 @@ Content-Type: application/json
 ### 6.1 事件与检索
 
 ```http
-POST /v1/events
+POST /v2/events
 {"content":"raw event","source":"manual","source_ref":null,"metadata":{},"extract":true}
 ```
 
 ```http
-POST /v1/memories/search
+POST /v2/memories/search
 {"query":"SQLite FTS5","limit":10,"types":["project"],"min_importance":0.0,"min_confidence":0.0}
 ```
 
@@ -195,49 +196,49 @@ POST /v1/memories/search
 ### 6.2 策略判断
 
 ```http
-POST /v1/memory/should-use
+POST /v2/memory/should-use
 {"task":"继续之前的项目","conversation_summary":null}
 ```
 
 ### 6.3 行为与画像
 
 ```http
-POST /v1/behavior/choice
+POST /v2/behavior/choice
 {"context":"存储选型","chosen":["SQLite FTS5"],"rejected":["Qdrant"],"deferred":[],"reason":"保持轻量","source_ref":null}
 ```
 
 ```http
-POST /v1/memory/consolidate
+POST /v2/memory/consolidate
 {"recent":100}
 ```
 
 ```http
-GET /v1/profile?limit=20&q=技术路线
+GET /v2/profile?limit=20&q=技术路线
 ```
 
 ### 6.4 上下文
 
 ```http
-POST /v1/context/compile
+POST /v2/context/compile
 {"task":"继续 PAM-OS","limit":8,"min_importance":0.0,"min_confidence":0.5}
 ```
 
 ```http
-POST /v1/reflect
+POST /v2/reflect
 {"recent":50}
 ```
 
 ### 6.5 诊断与维护
 
 ```http
-GET /v1/storage/stats
-GET /v1/memory/inspect?table=quality_traces&limit=20
+GET /v2/storage/stats
+GET /v2/memory/inspect?table=quality_traces&limit=20
 ```
 
 清空是不可逆操作：
 
 ```http
-POST /v1/memory/clear
+POST /v2/memory/clear
 {"confirm":true}
 ```
 
@@ -268,17 +269,13 @@ skill 只有在用户明确要求清理时才能调用该接口。
 
 ## 8. 安全边界
 
-当前版本是单实例、单用户数据库模型。客户端不能再通过 `user_id` 或 `X-PAM-OS-User` 切换数据库。
-
-原因是旧实现只有文件分片，没有把用户身份绑定到认证主体；任何持有同一 Basic Auth 的客户端都能声明任意用户。这属于数据分区，不是授权隔离。
-
-如果未来需要真正多租户，应实现：
+当前版本实现了真正的认证与存储绑定：
 
 ```text
 credential/token -> authenticated subject -> fixed tenant -> tenant storage
 ```
 
-在此之前建议一名用户一个 PAM-OS 实例。
+Bearer API Key 只保存哈希，并固定绑定 Principal 与用户。普通业务接口不接受客户端声明用户。每个用户使用 `data_dir/users/<immutable-user-id>/memory.sqlite3`，数据库内的 `store_metadata.owner_user_id` 会在打开时校验。用户创建、密钥创建/吊销以及清空记忆会写入身份控制库的审计日志。
 
 ## 9. SQLite
 
@@ -299,9 +296,7 @@ docker build -t pam-os .
 docker run -d --name pam-os \
   -p 8765:8765 \
   -v pam-os-data:/data \
-  -e PAM_OS_AUTH_ENABLED=true \
-  -e PAM_OS_AUTH_USERNAME=user \
-  -e PAM_OS_AUTH_PASSWORD=change-me \
+  -e PAM_OS_BOOTSTRAP_TOKEN='replace-with-a-long-random-secret' \
   pam-os
 ```
 
@@ -322,7 +317,7 @@ Windows 使用 `scripts/install.ps1`，参数相同。本地 checkout：
 ./scripts/install.sh --repo-dir "$PWD" --yes
 ```
 
-安装器同时处理首次安装和更新；未指定目标时会自动识别已有集成。它会读取已有 skill 配置，把 URL、用户名、密码和超时作为默认值，刷新托管 checkout，并把 skill/API 版本、服务端版本、探测时间和匹配状态写入配置。交互模式不会明文回显旧密码。命令行参数和 `PAM_OS_REST_*` 环境变量优先于已有配置。Unix 下配置权限设为 `0600`，Windows 下移除继承 ACL 并仅授予当前用户访问。
+安装器同时处理首次安装和更新；未指定目标时会自动识别已有集成。它会读取已有 skill 配置，把 URL、Bearer Token 和超时作为默认值，刷新托管 checkout，并把 skill/API 版本、服务端版本、探测时间和匹配状态写入配置。交互模式不会明文回显旧 Token。命令行参数和 `PAM_OS_REST_*` 环境变量优先于已有配置。Unix 下配置权限设为 `0600`，Windows 下移除继承 ACL 并仅授予当前用户访问。
 
 ## 12. 开发接口
 
@@ -350,7 +345,7 @@ report = evaluate_quality_cases()
 - Python 包不再注册 `memory` / `pam-memory` 命令。
 - `src/pam_os/cli.py` 已删除。
 - FastAPI 与 Uvicorn 从可选依赖变为基础依赖。
-- 正式 API 使用 `/v1`。
+- 正式 API 使用 `/v2`。
 - 旧无版本路由暂时保留，但不出现在 OpenAPI 中。
 - skill 配置删除 `mode` 和 `[cli]`。
 - 数据库无需迁移；仍使用原 SQLite schema。

@@ -2,8 +2,21 @@
 # Copy this file to config/pam-os.toml and edit local values there.
 
 [storage]
-# SQLite database path. The default is user-global so multiple terminals and
-# projects share the same local memory database.
+# Multi-user data root. Identity data is stored in control.sqlite3 and each
+# user receives users/<immutable-user-id>/memory.sqlite3 below this directory.
+# Environment override: PAM_OS_DATA_DIR
+data_dir = "~/.pam-os"
+
+# Optional identity control database override. Empty means
+# <data_dir>/control.sqlite3.
+# Environment override: PAM_OS_CONTROL_DB
+control_db_path = ""
+
+# Maximum number of per-user runtimes retained in the in-process LRU cache.
+# Environment override: PAM_OS_RUNTIME_CACHE_SIZE
+runtime_cache_size = 128
+
+# Direct Python runtime fallback; the REST API does not use this database.
 # Environment override: PAM_OS_DB
 db_path = "~/.pam-os/memory.sqlite3"
 
@@ -15,14 +28,10 @@ db_path = "~/.pam-os/memory.sqlite3"
 host = "127.0.0.1"
 port = 8765
 
-# Optional HTTP Basic Auth for REST API.
-# Environment overrides:
-# - PAM_OS_AUTH_ENABLED
-# - PAM_OS_AUTH_USERNAME
-# - PAM_OS_AUTH_PASSWORD
-auth_enabled = false
-auth_username = ""
-auth_password = ""
+# One-time bootstrap credential used only to provision the first user through
+# POST /v2/admin/users. Remove it after issuing a user-bound admin API key.
+# Environment override: PAM_OS_BOOTSTRAP_TOKEN
+bootstrap_token = ""
 
 [context]
 # Default number of ordinary memories selected by prepare/compile flows.
