@@ -13,9 +13,9 @@ For every PAM-OS operation, run the bundled `scripts/pam_client.py`. The client 
 
 ```toml
 [versions]
-skill = "0.5.1"
+skill = "0.5.2"
 api = "v2"
-server = "0.5.1"
+server = "0.5.2"
 server_api = "v2"
 server_checked_at = "2026-07-18T00:00:00Z"
 status = "match"
@@ -33,7 +33,7 @@ Rules:
 - Run the platform launcher from this skill directory: `& scripts/pam_client.ps1` in PowerShell or `scripts/pam_client.sh` in Bash. The launcher finds Python 3.11+ (or `uv`) without handling credentials. Run its `check` command before the first memory operation in a turn. This safely loads config, calls `/v2/meta`, and prints only redacted version diagnostics.
 - Treat `[versions]` as installation diagnostics. `skill` and `api` identify this installed client; the installer probes the configured REST service and records the observed `server`, `server_api`, check time, and comparison `status`.
 - Do not silently use a different or unknown API. For authentication failures, unreachable services, malformed metadata, or an unsupported API generation, report the version-check failure and stop PAM-OS operations.
-- The client requires `rest.url`, loads the user-bound Bearer token without exposing it, and never sends a `user_id` selector. It rejects credentials embedded in URLs, legacy username/password authentication, absolute request URLs, unknown routes, and non-local HTTP servers.
+- The client requires an HTTP or HTTPS `rest.url`, loads the user-bound Bearer token without exposing it, and never sends a `user_id` selector. It rejects credentials embedded in URLs, legacy username/password authentication, absolute request URLs, and unknown routes.
 - If the client reports that the API key is empty or that legacy credentials are configured, ask the user to install a v2 API key. Do not inspect the config to diagnose it.
 - If the config is missing, invalid, or the API is unreachable, report that PAM-OS REST must be configured or started. Do not fall back to a local command.
 - Use short connect and total timeouts. Do not automatically retry write requests unless the server supports an idempotency key.

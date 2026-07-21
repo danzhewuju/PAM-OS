@@ -1,7 +1,7 @@
 # PAM-OS REST client configuration.
 
 [versions]
-skill = "0.5.1"
+skill = "0.5.2"
 api = "v2"
 server = ""
 server_api = ""

@@ -20,7 +20,6 @@ from urllib.request import Request, urlopen
 
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.toml"
-LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 ALLOWED_ROUTES = {
     ("GET", "/health/live"),
     ("GET", "/v2/meta"),
@@ -99,8 +98,6 @@ def _load_config() -> ClientConfig:
         raise PamClientError("PAM-OS REST URL must not contain credentials")
     if parsed.query or parsed.fragment:
         raise PamClientError("PAM-OS REST URL must not contain a query or fragment")
-    if parsed.scheme == "http" and parsed.hostname.lower() not in LOCAL_HOSTS:
-        raise PamClientError("PAM-OS requires HTTPS for non-local REST servers")
     if timeout <= 0 or timeout > 60:
         raise PamClientError("PAM-OS REST timeout must be between 0 and 60 seconds")
     if not token:

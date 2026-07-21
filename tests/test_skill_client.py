@@ -43,7 +43,7 @@ def _server(*, status: int = 200, response: dict | None = None):
                 body = json.dumps(
                     response
                     or {
-                        "version": "0.5.1",
+                        "version": "0.5.2",
                         "api_version": "v2",
                         "echo": TEST_TOKEN,
                         "username": "private-user",
@@ -81,7 +81,7 @@ def _installed_client(tmp_path: Path, url: str, *, token: str = TEST_TOKEN) -> P
         "\n".join(
             (
                 "[versions]",
-                'skill = "0.5.1"',
+                'skill = "0.5.2"',
                 'api = "v2"',
                 "",
                 "[rest]",
@@ -199,12 +199,13 @@ def test_http_error_does_not_echo_server_body_or_credentials(tmp_path):
     assert "denied" not in result.stdout + result.stderr
 
 
-def test_client_rejects_remote_plaintext_http_before_connecting(tmp_path):
+def test_client_allows_remote_plaintext_http_and_attempts_connection(tmp_path):
     client = _installed_client(tmp_path, "http://memory.example.test:8765")
     result = _run(client, "check")
 
     assert result.returncode == 2
-    assert "requires HTTPS" in result.stderr
+    assert "REST service is unreachable" in result.stderr
+    assert "requires HTTPS" not in result.stderr
     assert TEST_TOKEN not in result.stdout + result.stderr
 
 

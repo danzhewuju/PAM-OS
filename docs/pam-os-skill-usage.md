@@ -26,9 +26,9 @@ Windows：
 
 ```toml
 [versions]
-skill = "0.5.1"
+skill = "0.5.2"
 api = "v2"
-server = "0.5.1"
+server = "0.5.2"
 server_api = "v2"
 server_checked_at = "2026-07-18T00:00:00Z"
 status = "match"
