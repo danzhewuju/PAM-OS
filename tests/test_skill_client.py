@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -127,6 +128,50 @@ def test_powershell_launcher_finds_runtime_without_exposing_token(tmp_path):
     assert result.returncode == 0, result.stderr
     assert state["authorization"] == f"Bearer {TEST_TOKEN}"
     assert TEST_TOKEN not in result.stdout + result.stderr
+
+
+def test_powershell_launcher_ignores_failed_runtime_probe_output(tmp_path):
+    if sys.platform != "win32":
+        return
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        return
+
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    failed_probe = "@echo off\r\necho Python 3 not found!\r\nexit /b 1\r\n"
+    for command in ("python.cmd", "python3.cmd", "py.cmd"):
+        (shim_dir / command).write_text(failed_probe, encoding="utf-8")
+    (shim_dir / "uv.cmd").write_text(
+        "\r\n".join(
+            (
+                "@echo off",
+                'if "%~4"=="-c" exit /b 0',
+                f'"{sys.executable}" "%~4" %5 %6 %7 %8 %9',
+                "exit /b %ERRORLEVEL%",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PATH"] = str(shim_dir)
+
+    with _server() as (url, state):
+        client = _installed_client(tmp_path, url)
+        result = subprocess.run(
+            [powershell, "-NoProfile", "-File", str(client.with_suffix(".ps1")), "check"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert state["authorization"] == f"Bearer {TEST_TOKEN}"
+    assert "Python 3 not found!" not in output
+    assert TEST_TOKEN not in output
 
 
 def test_bash_launcher_finds_runtime_without_exposing_token(tmp_path):

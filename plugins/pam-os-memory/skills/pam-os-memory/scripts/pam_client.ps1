@@ -6,7 +6,7 @@ $Client = Join-Path $PSScriptRoot "pam_client.py"
 function Test-PythonCandidate {
     param([string]$Command, [string[]]$Prefix)
     try {
-        & $Command @Prefix -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" 2>$null
+        & $Command @Prefix -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" *> $null
         return $LASTEXITCODE -eq 0
     }
     catch {
