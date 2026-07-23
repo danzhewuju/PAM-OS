@@ -30,7 +30,7 @@ Rules:
 
 - Never open, print, search, or display `config.toml`. Never construct an Authorization header or pass a username, password, API key, or token in a shell command, tool argument, environment assignment, log, prompt, or handwritten HTTP request.
 - Do not use `curl`, `wget`, `Invoke-RestMethod`, or custom HTTP code for PAM-OS. If the bundled client is missing or fails, report the failure and stop PAM-OS operations; do not fall back.
-- Run the platform launcher from this skill directory: `& scripts/pam_client.ps1` in PowerShell or `scripts/pam_client.sh` in Bash. The launcher finds Python 3.11+ (or `uv`) without handling credentials. Run its `check` command before the first memory operation in a turn. This safely loads config, calls `/v2/meta`, and prints only redacted version diagnostics.
+- Run the platform launcher from this skill directory: `scripts\pam_client.ps1` in PowerShell or `scripts/pam_client.sh` in Bash. In sandboxed command runners, execute the resolved PowerShell launcher path directly instead of wrapping it in the `&` call operator so executable-scoped permission rules can match. The launcher finds Python 3.11+ (or `uv`) without handling credentials. Run its `check` command before the first memory operation in a turn. This safely loads config, calls `/v2/meta`, and prints only redacted version diagnostics.
 - Treat `[versions]` as installation diagnostics. `skill` and `api` identify this installed client; the installer probes the configured REST service and records the observed `server`, `server_api`, check time, and comparison `status`.
 - Do not silently use a different or unknown API. For authentication failures, unreachable services, malformed metadata, or an unsupported API generation, report the version-check failure and stop PAM-OS operations.
 - The client requires an HTTP or HTTPS `rest.url`, loads the user-bound Bearer token without exposing it, and never sends a `user_id` selector. It rejects credentials embedded in URLs, legacy username/password authentication, absolute request URLs, and unknown routes.
@@ -41,9 +41,9 @@ Rules:
 Invoke allowed operations through the client:
 
 ```text
-PowerShell: & scripts/pam_client.ps1 check
+PowerShell: scripts\pam_client.ps1 check
 Bash:       scripts/pam_client.sh check
-PowerShell: & scripts/pam_client.ps1 request GET /v2/storage/stats
+PowerShell: scripts\pam_client.ps1 request GET /v2/storage/stats
 Bash:       scripts/pam_client.sh request POST /v2/context/prepare --body-json <JSON>
 ```
 

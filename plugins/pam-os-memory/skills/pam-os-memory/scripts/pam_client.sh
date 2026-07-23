@@ -14,8 +14,8 @@ for candidate in "${candidates[@]}"; do
   fi
 done
 
-if uv run --no-project python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
-  exec uv run --no-project python "$client" "$@"
+if uv run --no-cache --no-project python -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+  exec uv run --no-cache --no-project python "$client" "$@"
 fi
 
 printf 'error: PAM-OS requires Python 3.11 or newer (or uv).\n' >&2

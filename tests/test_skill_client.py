@@ -146,8 +146,12 @@ def test_powershell_launcher_ignores_failed_runtime_probe_output(tmp_path):
         "\r\n".join(
             (
                 "@echo off",
-                'if "%~4"=="-c" exit /b 0',
-                f'"{sys.executable}" "%~4" %5 %6 %7 %8 %9',
+                'if not "%~2"=="--no-cache" (',
+                "  echo Failed to initialize uv cache!",
+                "  exit /b 2",
+                ")",
+                'if "%~5"=="-c" exit /b 0',
+                f'"{sys.executable}" "%~5" %6 %7 %8 %9',
                 "exit /b %ERRORLEVEL%",
                 "",
             )
@@ -171,6 +175,7 @@ def test_powershell_launcher_ignores_failed_runtime_probe_output(tmp_path):
     assert result.returncode == 0, output
     assert state["authorization"] == f"Bearer {TEST_TOKEN}"
     assert "Python 3 not found!" not in output
+    assert "Failed to initialize uv cache!" not in output
     assert TEST_TOKEN not in output
 
 

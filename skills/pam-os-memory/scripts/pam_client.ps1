@@ -18,7 +18,7 @@ $candidates = @(
     [pscustomobject]@{ Command = "python"; Prefix = @() },
     [pscustomobject]@{ Command = "python3"; Prefix = @() },
     [pscustomobject]@{ Command = "py"; Prefix = @("-3") },
-    [pscustomobject]@{ Command = "uv"; Prefix = @("run", "--no-project", "python") }
+    [pscustomobject]@{ Command = "uv"; Prefix = @("run", "--no-cache", "--no-project", "python") }
 )
 
 foreach ($candidate in $candidates) {
